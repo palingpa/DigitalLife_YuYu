@@ -1,0 +1,3 @@
+# 鱼鱼运行所需依赖
+openai>=1.40       # DeepSeek 官方兼容 OpenAI SDK 格式，用它最省事
+pytest>=8.0        # 只在跑测试时需要，正式运行不依赖

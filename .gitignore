@@ -1,0 +1,11 @@
+# 真实数据（鱼鱼的记忆和日志都在里面，别提交）
+data/
+logs/
+# Python 运行产物
+__pycache__/
+*.pyc
+.pytest_cache/
+# 密钥
+.env
+backups/
+.workbuddy/
