@@ -14,6 +14,8 @@
 |---|---|
 | 为什么这么设计（DDL、动力学、两段式输出） | `Design_v0.2.md` |
 | 怎么跑、怎么观察、目录速览 | `README.md` |
+| **架构大白话：模块/数据/改哪儿会碰坏什么** | `ARCHITECTURE.md` |
+| **测试大白话：pytest 入门 + 8 个测试文件地图 + 改了 X 跑什么** | `TESTING.md` |
 | v0.1 原始草稿（历史记录，别改） | `Draft.md` |
 | 每次改动的时间线与理由 | `DEVLOG.md`（追加式） |
 | 所有魔法数字 | `fish/config.py`（每项注明 Design 出处） |
@@ -44,6 +46,12 @@
 1. 动了 `state.py` 或 tests/ → 跑 `python -m pytest tests/ -q`
 2. 小步提交：一次改动一个 commit，message 写清"改了什么"，谁改谁提交
 3. 在 `DEVLOG.md` 追加一条（格式见该文件头部）
+
+### 文档同步（谁改谁维护）
+
+- 调整项目结构、加删模块、改数据表 → 同步 `ARCHITECTURE.md`
+- 加删测试文件、改测试跑法 → 同步 `TESTING.md`
+- 状态推进到新阶段（新行为出现、里程碑）→ 更新本文件「当前状态」
 
 ### DEVLOG 纪律
 
