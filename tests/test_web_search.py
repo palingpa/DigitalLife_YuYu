@@ -103,5 +103,5 @@ def test_contract_lists_every_tool():
 def test_web_search_costs_energy_and_relieves_boredom():
     s = state.State(energy=60.0, valence=50.0, boredom=40.0)
     state.apply_tool_effect(s, "web_search", ok=True, repeat_streak=1)
-    assert s.energy == 57.0        # -3：出门找东西费神
+    assert s.energy == 50.0        # -10：出门找东西费神（2026-11-10 夜加重到 -10）
     assert s.boredom == 25.0       # 首次解闷 -15，和别的工具同一套边际递减

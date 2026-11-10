@@ -59,20 +59,26 @@ EXTERNAL_WAKE_MIN_GAP = 2
 # 具体措辞待小帕定稿（见 tools/__init__.py 与 prompt.py 的占位符）。
 XIAOPA_MSG_TAG = "小帕"
 
-# ── 状态动力学（Design_v0.2 §4）────────────────────────────────────────
-# 睡眠恢复：两次唤醒间隔够长，energy 额外回一点血。
-# 三道闸防滥用（缺一道就会变成「心情差就去睡」的最优策略）：
+# ── 状态动力学（Design_v0.2 §4，2026-11-10 夜修订）─────────────────────
+# energy（精力）改成了纯「电池」模型，不再接受模型自评修正（详见 state.py）：
+#   - 只在「做动作」时按动作扣（read/search 费神、write 略费、recall 不费）
+#   - 只在「睡觉」（两次唤醒的间隔够长）时按分钟回血
+#   - 不再向 baseline 回归、自评 delta 也不碰它——否则会被钉死在 baseline
+#     附近，永远走不到「精力很低」，也就永远不会主动去休息。
+# 设计意图：让她"累→休息→恢复→再累"真实地循环起来。
+#
+# 睡眠恢复的三道闸（防滥用，缺一道就变成「心情差就去睡」的最优策略）：
 #   1. 只作用于 energy，不碰 valence——睡能解乏，不解心结
-#   2. 单次封顶 SLEEP_MAX_BONUS，且超过 WAKE_MAX_GAP 的部分不计
+#   2. 单次封顶 SLEEP_MAX_BONUS；间隔够长也不无限累加
 #   3. 结算完全在服务端：她只能选「下次几点醒」，不能「立刻躺下」（I2）
-SLEEP_MIN_MIN = 45             # 间隔小于它算打盹，不享受恢复
-SLEEP_RECOVERY_PER_HOUR = 2.0  # 每睡一小时额外回复的 energy
-SLEEP_MAX_BONUS = 6.0          # 单次睡眠恢复上限（睡饱即止，不超 baseline）
-BASELINE = {"energy": 55.0, "valence": 50.0}   # 各属性的"常态值"
-REGRESS_PER_HOUR = {"energy": 0.04, "valence": 0.03}   # 每小时向 baseline 回归的比例
+SLEEP_MIN_MIN = 60             # 间隔 < 60 分钟算打盹，不享受恢复（"睡不到一小时"）
+SLEEP_RECOVERY_PER_MIN = 0.15  # 每睡一分钟回复的 energy（按分钟精确结算）
+SLEEP_MAX_BONUS = 30.0         # 单次睡眠恢复上限（约略大于一个档位，不会一口气回满）
+BASELINE = {"energy": 55.0, "valence": 50.0}   # valence 的回归目标；energy 仅作参考
+REGRESS_PER_HOUR = {"valence": 0.03}   # 只有 valence 向 baseline 回归（energy 是电池，不回归）
 BOREDOM_PER_MIN = 0.03     # 无聊度每分钟 +0.03 → 一天不做事约 +43
 CLAMP = (5.0, 95.0)        # 所有属性永远留在这个区间内，防止贴死 0/100
-CUTS = (25, 50, 75)        # 属性分档阈值
+CUTS = (25, 50, 75)        # 属性分档阈值（energy / boredom 共用）
 
 # 模型自评 delta 的允许范围（-10..+10 的"刻度"，实际除以 10）
 FELT_DELTA_RANGE = 10.0

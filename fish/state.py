@@ -2,14 +2,17 @@
 
 三条铁律（Design_v0.2.md §1 的不变量）在本文件执行：
 
-I2  模型的输出永远不直接成为状态值——它只能给 -10..+10 的 delta「刻度」，
-    这里统一除以 10 再加到 0..100 的实际数值上，并且 clamp。
-    换句话说：模型能表达「更累一点」，但不能说「我现在的能量是 5」。
+I2  模型的输出永远不直接成为状态值。valence 仍可由模型自评一个
+    -10..+10 的 delta「刻度」，这里除以 10 再加到 0..100 上并 clamp；
+    boredom 则完全由服务端规则决定（见 apply_tool_effect）——它高会
+    触发紧急唤醒，若模型能给自己加 boredom，就等于掌握了「让自己早点醒」
+    的开关，自主性在结构上变假。
 
-    另外，实现时堵了文档里没写的一个漏洞：felt_delta 不允许碰 boredom。
-    原因：boredom 高会触发紧急唤醒（§6.1 路径 B），如果模型能给自己加
-    boredom，它就等于掌握了「让自己早点醒」的开关——自主性会在结构上
-    变成假的。boredom 的所有变化只来自服务端规则（见 apply_tool_effect）。
+    energy 自 2026-11-10 夜起是纯「系统量」：只在「做动作」时按动作
+    扣（见 apply_tool_effect）、只在「睡觉」时按分钟回（见
+    apply_sleep_recovery），既不向 baseline 回归、也不接受模型自评。
+    这是因为早期版本让 energy 自评 + 回归 baseline，结果被钉死在 55
+    附近，她永远走不到「精力很低」、也就不会主动去休息——自主性同样变假。
 """
 
 from dataclasses import dataclass
@@ -53,57 +56,66 @@ def _clamp(v: float) -> float:
 def tick_regress(s: State, minutes: float) -> None:
     """每 tick 调用：时间的自然流逝对状态的影响。
 
-    两件事：
-    1. energy/valence 向 baseline 回归——心情有「恢复力」，难过会淡，
-       兴奋会平。回归率按实际经过的小时数缩放，所以 tick 晚点跑也准确。
-    2. boredom 按分钟匀速上涨——这是唯一的「只增不减」量，是鱼鱼
-       最终一定会去找事做的结构性原因（Design_v0.2 §4.1）。
+    只有 valence 向 baseline 回归——心情有「恢复力」，难过会淡，
+    兴奋会平。回归率按实际经过的小时数缩放，所以 tick 晚点跑也准确。
+
+    energy 不在这里回归（见文件头）：它是纯电池模型，只在「做动作」
+    时按动作扣、只在「睡觉」时按分钟回血。若也向 baseline 回归，它会被
+    钉死在 55 附近、永远走不到「精力很低」，自主性就成了假的。
+
+    boredom 按分钟匀速上涨——这是唯一的「只增不减」量，是鱼鱼
+    最终一定会去找事做的结构性原因（Design_v0.2 §4.1）。
     """
     hours = minutes / 60.0
-    for attr, base in config.BASELINE.items():
-        cur = getattr(s, attr)
-        rate = min(config.REGRESS_PER_HOUR[attr] * hours, 0.5)  # 0.5 上限防 tick 异常大
-        setattr(s, attr, _clamp(cur + (base - cur) * rate))
+    # 只有 valence 回归 baseline；energy 是电池，不回归
+    cur = s.valence
+    rate = min(config.REGRESS_PER_HOUR["valence"] * hours, 0.5)  # 0.5 上限防 tick 异常大
+    s.valence = _clamp(cur + (config.BASELINE["valence"] - cur) * rate)
     s.boredom = _clamp(s.boredom + config.BOREDOM_PER_MIN * minutes)
 
 
 def apply_sleep_recovery(s: State, minutes: float) -> float:
     """结算睡眠恢复：间隔够长的一次「睡觉」让 energy 额外回血。
 
-    为什么需要它：tick_regress 对醒着和睡着一视同仁，睡 75 分钟只从
-    回归里拿回零点几——「下次几点醒」就变成了纯叙事选择，没有任何
-    身体后果。这个函数让睡眠真的有区别，next_wake_in_min 才算一个
-    带物理含义的决策。
+    为什么需要它：电池模型下，tick_regress 不再管 energy，睡 75 分钟
+    就什么都不回——「下次几点醒」会变成纯叙事选择，没有身体后果。
+    这个函数让睡眠真的有区别，next_wake_in_min 才算一个带物理含义的决策。
 
-    防滥用的闸门都在 config 注释里；这里只补一条：恢复量同时受
-    baseline 限制——energy 55 以上睡觉不再回血，「睡饱即止」。
+    按分钟精确结算（2026-11-10 夜）：她一般睡不到一小时或 1~2 小时，
+    用「每分钟 0.15」比「每小时 2」更贴合真实间隔。
+
+    两道闸（config 注释里还有第三道 I2 不在服务端）：
+    1. 间隔 < SLEEP_MIN_MIN（60 分）不算睡，一分血不回（打盹）。
+    2. 单次封顶 SLEEP_MAX_BONUS（30）——睡再久也不一口气回满，
+       防止「睡一觉从很低直接弹到充沛」。
+    不再有「不超 baseline」的截顶：睡饱了就该比 baseline 更有精神。
     返回实际生效的 bonus（0 表示没睡够时长），调用方记轨迹用。
     """
     if minutes < config.SLEEP_MIN_MIN:
         return 0.0
-    bonus = config.SLEEP_RECOVERY_PER_HOUR * min(minutes, config.WAKE_MAX_GAP) / 60.0
-    bonus = max(0.0, min(bonus, config.SLEEP_MAX_BONUS,
-                         config.BASELINE["energy"] - s.energy))
+    bonus = config.SLEEP_RECOVERY_PER_MIN * minutes
+    bonus = min(bonus, config.SLEEP_MAX_BONUS)
     s.energy = _clamp(s.energy + bonus)
     return bonus
 
 
 def apply_felt_delta(s: State, delta: dict) -> None:
-    """应用模型的自评感受变化。
+    """应用模型的自评感受变化（仅 valence）。
 
-    delta 是模型输出的 dict，如 {"energy": -2, "valence": 3}。
+    delta 是模型输出的 dict，如 {"valence": 3}。
     - 刻度 -10..+10 → 实际 -1..+1（除以 10）
-    - 缺哪个键就当 0，写错的键直接忽略
-    - 特意不处理 boredom，理由见文件头注释
+    - 缺键 / 写错键直接忽略
+    - 不处理 boredom（见文件头）；也不处理 energy——energy 自
+      2026-11-10 夜起是纯系统量（动作扣、睡觉回），模型自评不再生效，
+      否则她会把自己「想」累或「想」精神，自主性变假。
     """
-    for attr in ("energy", "valence"):
-        raw = delta.get(attr, 0)
-        try:
-            d = float(raw)
-        except (TypeError, ValueError):
-            continue  # 模型给了非数字，忽略而不是崩溃
-        d = max(-config.FELT_DELTA_RANGE, min(config.FELT_DELTA_RANGE, d))
-        setattr(s, attr, _clamp(getattr(s, attr) + d / 10.0))
+    raw = delta.get("valence", 0)
+    try:
+        d = float(raw)
+    except (TypeError, ValueError):
+        return  # 模型给了非数字，忽略而不是崩溃
+    d = max(-config.FELT_DELTA_RANGE, min(config.FELT_DELTA_RANGE, d))
+    s.valence = _clamp(s.valence + d / 10.0)
 
 
 def apply_tool_effect(s: State, tool_name: str, ok: bool, repeat_streak: int) -> None:
@@ -125,14 +137,15 @@ def apply_tool_effect(s: State, tool_name: str, ok: bool, repeat_streak: int) ->
     s.boredom = _clamp(s.boredom - relief)
 
     effects = {
-        "read_feed":     {"energy": -3.0},               # 读东西费神
-        "write_journal": {"valence": 3.0},               # 写完日记舒坦一点
-        "recall":        {},                             # 回忆基本不解闷，这正是看点
-        "web_search":    {"energy": -3.0},               # 出门找东西同样费神
-        # 给小帕发一句话：把心思说出去，微微舒坦；组织语言、等回应略费神。
-        # 先不加 boredom 缓解的额外逻辑——这里的 -1 只是「费神」维度，
-        # 解闷仍走上面的标准边际递减（她做了件事，无聊度自然降）。
-        "send_message":  {"valence": 2.0, "energy": -1.0},
+        # 读 / 搜都是「费神」的对外活动，扣得狠一点：5 次连读就该见底
+        "read_feed":     {"energy": -10.0},
+        "web_search":    {"energy": -10.0},
+        # 写日记：费神但比读轻，且顺带 valence +3（写完舒坦）
+        "write_journal": {"valence": 3.0, "energy": -8.0},
+        "recall":        {},                             # 翻自己记忆不费神
+        # 给小帕发一句话：把心思说出去微微舒坦；组织语言略费神。
+        # 这里的 -2 只是「费神」维度，解闷仍走上面的标准边际递减。
+        "send_message":  {"valence": 2.0, "energy": -2.0},
     }
     for attr, d in effects.get(tool_name, {}).items():
         setattr(s, attr, _clamp(getattr(s, attr) + d))

@@ -66,6 +66,34 @@
 两份文档已挂进 PROJECT.md 文档地图，并新增「文档同步」维护约定。
 内容基于今天对全部 14 个源文件 + 8 个测试文件的通读，非泛泛而谈。
 
+## [2026-11-10 23:14] Kite · energy 改为纯电池模型（解「钉死在稳定点」）
+
+**为什么**：小帕观察到鱼鱼多次出现「精力偏低→选轻内容读」的因果，但 energy
+被两道机制同时钉在 baseline(55) 附近——① `tick_regress` 把 energy 向 55
+回归；② `apply_sleep_recovery` 的「睡饱即止」把恢复封顶在 baseline-energy。
+结果：掉不到「精力很低」、也回不到「精力较好」，自主选择休息的动力没了。
+小帕两点要求（① 精力纯系统算、不再吃自评修正；② 恢复按分钟精确）方向对，
+但只做这两点解不了钉——必须同时去掉「向 baseline 回归」和「恢复不超 baseline」。
+
+**改了什么**：
+- `config.py`：`SLEEP_MIN_MIN` 45→60（"睡不到一小时"不算睡）；新增
+  `SLEEP_RECOVERY_PER_MIN=0.15`（去掉旧的按小时常量）；`SLEEP_MAX_BONUS=30`；
+  删 `REGRESS_PER_HOUR["energy"]`。
+- `state.py`：`tick_regress` 只回归 valence；`apply_sleep_recovery` 改按分钟、
+  去 baseline 截顶（睡饱可超 baseline）；`apply_felt_delta` 只处理 valence
+  （energy 不再吃自评）；`apply_tool_effect` 精力消耗 read/search -10、write
+  -8、send -2、recall 0。
+- 测试：同步 4 个旧测试（energy 不再回归/自评/被 baseline 截顶）、新增 2 个电池
+  行为测试；新增 `tests/test_energy_battery.py`（3 条验收）+ 根目录 `sim_energy.py`
+  （3 场景 + 蒙特卡洛，可 `python sim_energy.py` 直接跑）。
+
+**验收（sim_energy.py + pytest 全绿 65/65）**：① 连续读 5 次（间隔<60 不回血）
+→ 精力很低；② 从很低空转+150 分休息 → 升一档；③ 混合 24 轮横跨全部 4 档；
+蒙特卡洛 400 轮分布 很低19%/偏低27%/较好30%/充沛24%——确实在游走。
+
+**注意**：`felt_delta` 的响应契约仍让模型输出 energy 键，但现在被忽略（无害）。
+想彻底清爽可后续把契约里的 energy 自评去掉，但属非必要改动，未动。
+
 ## [2026-11-10 16:02] Kite · 修复 write_journal 描述丢失「主动」语义（红测试）
 
 **为什么**：初始提交后发现基线就有一个失败测试（51 项中 1 项）。`write_journal`
