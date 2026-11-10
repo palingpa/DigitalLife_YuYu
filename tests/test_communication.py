@@ -122,7 +122,7 @@ def test_send_message_single_pass_and_delivers(tmp_path, monkeypatch):
     # 2) 只多一条记忆，是她主动给小帕的留言（不是第二段反应记忆）
     mems = c.execute("SELECT content, tags FROM memories").fetchall()
     assert len(mems) == 1
-    assert mems[0]["content"].startswith("[你自己]")
+    assert mems[0]["content"].startswith("[发给小帕]")
     assert mems[0]["tags"] == config.XIAOPA_MSG_TAG
 
     # 3) from_yuyu 消息已投递，供小帕收件脚本取
