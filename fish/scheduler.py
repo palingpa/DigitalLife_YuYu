@@ -256,6 +256,27 @@ def _retained_ratio(old: str, new: str) -> float:
     return total / len(sents)
 
 
+def _review_decision(old: str, new: str) -> tuple[bool, str]:
+    """决定自省结果是否被接受。纯函数，便于单测，不碰数据库/网络。
+
+    返回 (accepted, detail)：detail 用于事件日志，调用方再按接受/拒绝加前缀。
+    两层闸：
+      1) 硬上限：new 超过 SELF_REVIEW_HARD_MAX → 拒绝（安全网，正常几乎不触发）。
+      2) 保留率：平时要求保留 ≥MIN_RETENTION 的旧句（防一把推翻自己）；
+         但旧版已超软目标时放宽到 MIN_RETENTION_OVER_TARGET，允许往 target 压。
+    """
+    if len(new) > config.SELF_REVIEW_HARD_MAX:
+        return False, (f"超长：{len(new)} > {config.SELF_REVIEW_HARD_MAX}"
+                       f"（保留上一版，下轮请压缩）")
+    eff_min = (config.SELF_REVIEW_MIN_RETENTION_OVER_TARGET
+               if len(old) > config.SELF_REVIEW_TARGET_MAX
+               else config.SELF_REVIEW_MIN_RETENTION)
+    retained = _retained_ratio(old, new)
+    if retained < eff_min:
+        return False, f"保留率 {retained:.2f} < {eff_min}（旧叙事被删太多）"
+    return True, f"保留率 {retained:.2f}，{len(old)}→{len(new)}字"
+
+
 async def _self_review(conn: sqlite3.Connection, client, trace_id: str = "") -> None:
     """核心记忆自省：重写自我叙事（Design_v0.2 §5.3）。
 
@@ -284,14 +305,12 @@ async def _self_review(conn: sqlite3.Connection, client, trace_id: str = "") -> 
         conn.commit()
         return
 
-    retained = _retained_ratio(old, new)
-    if retained < config.SELF_REVIEW_MIN_RETENTION:
+    accepted, detail = _review_decision(old, new)
+    if not accepted:
         conn.execute(
             """INSERT INTO events (ts, kind, trigger, why, trace_id)
                VALUES (?, 'error', 'self_review', ?, ?)""",
-            (util.now_iso(),
-             f"自省被拒：旧叙事保留率 {retained:.2f} < {config.SELF_REVIEW_MIN_RETENTION}",
-             trace_id or None),
+            (util.now_iso(), f"自省被拒：{detail}", trace_id or None),
         )
         conn.commit()
         return
@@ -300,9 +319,7 @@ async def _self_review(conn: sqlite3.Connection, client, trace_id: str = "") -> 
     conn.execute(
         """INSERT INTO events (ts, kind, trigger, why, trace_id)
            VALUES (?, 'self_review', 'self_review', ?, ?)""",
-        (util.now_iso(),
-         f"自我叙事已更新（保留率 {retained:.2f}，{len(old)}→{len(new)}字）",
-         trace_id or None),
+        (util.now_iso(), f"自我叙事已更新（{detail}）", trace_id or None),
     )
     conn.commit()
 
