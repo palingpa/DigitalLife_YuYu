@@ -4,7 +4,7 @@
 「事后你记下：「…」」的反应反思，于是推断「写日记刚写过两小时内的」，
 降低了使用 write_journal 工具的意愿。反思是系统自动存下的「当时心里怎么想」，
 和「主动写日记」是两回事。这个测试锁住：标签不再用「记下」，
-且 write_journal 的工具说明自己点明了区别。
+且写日记工具描述指向「主动写日记」行为（具体措辞归小帕，红线不代笔）。
 """
 
 import pytest
@@ -56,9 +56,12 @@ def test_reflection_label_is_thought_not_journal(conn):
     assert "写日记" not in refl_line, "反思标签里不能出现「写日记」"
 
 
-def test_write_journal_desc_distinguishes_from_auto_reflection(conn):
-    """write_journal 说明要让她分清「主动写」和「系统自动记的事后想法」。"""
+def test_write_journal_desc_refers_to_diary(conn):
+    """write_journal 的工具描述必须指向「写日记」这个她主动的行为。
+
+    注意：具体措辞（是否强调「主动」、是否点明「区别于系统自动记的事后想法」）
+    属于会注入给鱼鱼的提示词，按分工红线由小帕本人定稿，这里只锁契约性质——
+    描述必须存在、且明确指向「写日记」这件事，不锁定具体字词（否则 Kite 越界代笔）。
+    """
     desc = next(t.desc for t in tools.ALL_TOOLS if t.name == "write_journal")
-    assert "主动" in desc, "要强调这是她主动的行为"
-    assert "事后想法" in desc or "自动" in desc, \
-        "要点明它和每次行动后自动存下的「事后想法」不是一回事"
+    assert desc and "日记" in desc, "工具说明必须指向「写日记」这一行为"

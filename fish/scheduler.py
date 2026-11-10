@@ -123,9 +123,11 @@ async def wake(conn: sqlite3.Connection, client, trigger: str) -> None:
 
         # ── 两段式的分叉点 ────────────────────────────────────────────
         # 判据是「有没有产生可消化的内容」，不是「她选了哪个工具」。
-        # 这样加第四个工具时不用改这里：只要它返回 detail 就会自动进第二段。
+        # 通常加新工具不用改这里：只要它返回 detail 就会自动进第二段。
+        # 唯一的例外是 write_journal：日记本身就是反思，不需要再把刚写的
+        # 原文念一遍让她「回应自己的日记」（那等于对反思再做一次反思）。
         # 空转和失败没有 detail，也就不多花那一次调用。
-        if ok and (result.detail or "").strip():
+        if ok and (result.detail or "").strip() and d.tool != "write_journal":
             reaction = await asyncio.to_thread(
                 brain.react, client, messages, d, d.tool,
                 result.summary, result.detail, tid,
@@ -137,8 +139,11 @@ async def wake(conn: sqlite3.Connection, client, trigger: str) -> None:
             if reaction.next_wake_in_min:
                 d.next_wake_in_min = reaction.next_wake_in_min   # 读完可以改主意
         else:
-            # 想去读，结果 inbox 是空的：这也是一种经历，但没有内容可消化。
-            # 不额外调用，挫败感交给规则侧（apply_tool_effect 扣 valence）。
+            # 走这里有两种情况：
+            #  - 空转 / 失败 / 工具没返回可消化内容（如 inbox 是空的）——
+            #    挫败感交给规则侧（apply_tool_effect 扣 valence），不额外调用。
+            #  - 刻意单段的工具（write_journal）：日记写完即止，不回念。
+            # 这些情况下「看完之后的感觉」不存在，就用第一段给的 felt_delta。
             state_mod.apply_felt_delta(s, d.felt_delta)
 
         state_mod.apply_tool_effect(s, d.tool, ok, _repeat_streak(conn, d.tool))
