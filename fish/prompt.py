@@ -36,12 +36,11 @@ CONTRACT = """你的回复必须是一个 JSON 对象，字段如下：
   "tool": __TOOLS__,
   "args": {},
   "why": "第一人称，不超过40字。空转也要写。",
-  "felt_delta": {"energy": -10到10, "valence": -10到10},
+  "felt_delta": {"valence": -10到10},
   "next_wake_in_min": 10到180之间的整数,
 }
 注意：
-felt_delta 只写「你此刻醒来时的感觉」，不是「你猜这件事会让你怎么样」——
-做完之后系统会把结果给你看，再问你一次。
+felt_delta 只写「你此刻醒来时的感觉」，不是「你猜这件事会让你怎么样」—— 做完之后系统会把结果给你看，再问你一次。
 next_wake_in_min 是你决定自己想在多少分钟后再次醒来,""".replace("__TOOLS__", _TOOL_ENUM)
 
 
@@ -54,12 +53,12 @@ REACTION_CONTRACT = """你刚做了一件事，现在看到了结果。
 
 输出 JSON：
 {
-  "felt_delta": {"energy": -10到10, "valence": -10到10},
+  "felt_delta": {"valence": -10到10},
   "memory": "1-2句你以后会记得的版本。写你实际看到的东西和你的反应。",
   "next_wake_in_min": 10到180之间的整数（可选，不写就沿用原来的）
 }
 注意：
-- felt_delta 是「这件事让你感觉怎么样」，跟你刚才的预期无关
+- felt_delta 是「这件事让你感觉怎么样」
 - memory 会进长期记忆，下次醒来会原样读回给你，只写你真正想留住的"""
 
 
