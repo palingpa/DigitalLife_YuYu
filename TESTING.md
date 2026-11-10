@@ -25,11 +25,12 @@ python -m pytest tests/ -v          # 详细模式，每个测试的名字都列
 
 **绿 vs 红**：全过显示 `51 passed`；有挂的会列出 FAILED 和失败原因，**先读它打印的 assert 信息**，多半一眼能看懂。
 
-## 8 个测试文件分别测什么
+## 各测试文件分别测什么
 
 | 文件 | 测的是 | 典型场景 |
 |---|---|---|
 | `test_state.py` | **身体动力学**（最重要的一组）：回归 baseline、boredom 只涨不跌、模型 delta 除以 10、模型碰不到 boredom、解闷边际递减、睡眠恢复三道闸、分档读数 | 动了 `state.py` 或 `config.py` 的动力学数字 |
+| `test_energy_battery.py` | energy「电池」模型：只在做动作时扣、只在睡觉时回血、不向 baseline 回归 | 动了 `state.py` 的 energy 结算 |
 | `test_scheduler.py` | 闹钟计算 `_next_due`：自省/错误这些"旁支行"不能抢闹钟 | 动了 `scheduler.py` 的唤醒判断 |
 | `test_memory_search.py` | 检索的相关性闸门：不相关的记忆不许靠置顶刷榜、空格是词边界、单字查询能命中 | 动了 `memory.py` 的检索/打分 |
 | `test_recall_dedup.py` | recall 去重：这轮已经看过的记忆不重复放送、全重复时如实说没有新的 | 动了 `tools._run_recall` 或 prompt 的上下文组装 |
@@ -37,6 +38,11 @@ python -m pytest tests/ -v          # 详细模式，每个测试的名字都列
 | `test_fulltext_fetch.py` | RSS 解析带出 link、旧库补 link 列、读时抓全文、抓不到如实说明、DRY_RUN 不花钱 | 动了 `feed._parse`、`db._migrate`、`tools._run_read_feed` |
 | `test_web_search.py` | web_search 的参数校验、结果排版、预算平分、报错诚实、DRY_RUN 不发请求、契约枚举覆盖所有工具 | 加新工具（最后两个测试是通用的，必看） |
 | `test_prompt_reflection.py` | "事后想法"不能被读成"写日记"：渲染用"心里想"、write_journal 说明要点明区别 | 改 `prompt.py` 的反思渲染或工具 desc 文案 |
+| `test_write_journal_single_pass.py` | write_journal 单段即止：日记不再进第二段"回应自己的日记" | 动了 `scheduler.wake` 的两段式分叉 |
+| `test_self_review_cap.py` | 自省叙事的长度闸门：软目标/硬上限/保留率拒写、关系叙事落库 | 动了 `_review_decision` 或 `_self_review` |
+| `test_communication.py` | 小帕↔鱼鱼消息收发、DRY_RUN 整个 wake 零副作用（零事件/零记忆/来信不被消费） | 动了 `messages.py` 或 `scheduler.wake` 的 DRY_RUN 短路 |
+| `test_messages_exchanges.py` | 自省用的双向往来取数与排版 | 动了 `messages.recent_exchanges` / `format_exchanges` |
+| `test_lock.py` | **单实例锁**：第二个进程必须被拒（SystemExit）、进程死锁自动消失（close 即释放）、每次启动尝试各留一行启动日志 | 动了 `fish/lock.py` 或 `main.py` 的加锁顺序 |
 
 ## 我改了 X，要跑什么？（速查表）
 

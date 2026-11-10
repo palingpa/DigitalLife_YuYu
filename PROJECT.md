@@ -24,7 +24,9 @@
 
 - **I1** heartbeat 永不写 memories
 - **I2** 模型输出不直接成为状态值（必须经 state.py 的动力学规则）
-- **I3** 单飞锁：同一时刻仅一个 wake
+- **I3** 单飞，两层保证：进程级——本机同一时刻只有一个鱼鱼进程（`fish/lock.py`，
+  `data/fish.lock` 的 OS 锁，不分 DRY_RUN/真实，`main` 第一行抢锁）；进程内——
+  同一时刻仅一个 wake（`scheduler.py` 的 `wake_lock`）
 
 ## 当前状态（2026-11-10）
 

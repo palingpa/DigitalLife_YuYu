@@ -46,7 +46,8 @@
 
 | 文件 | 大白话是什么 | 改它要小心什么 |
 |---|---|---|
-| `main.py` | 入口，34 行。启动两个循环 | 基本不用动 |
+| `main.py` | 入口，34 行。先抢单实例锁（同机只许一条鱼），再启动两个循环 | 基本不用动 |
+| `lock.py` | **单实例锁**：对 `data/fish.lock` 上 OS 级字节锁，第二个进程启动直接被拒（不分 DRY_RUN/真实）。进程一死锁自动消失，没有残留死锁。顺便往 `logs/startup.log` 记每次启动尝试（START/BLOCKED，带时间戳） | 锁的获取必须在碰数据库之前（main 第一行）；fd 永远不要主动 close |
 | `config.py` | **所有数字都住这里**，每个数字注明了理由和 Design 出处 | 改数字 = 改鱼鱼的性格/作息，先想清楚；别把密钥写进来 |
 | `db.py` | 建表、开库、旧库补列（migration） | 改表结构必须同时改 `_migrate`，否则旧库直接报"no such column" |
 | `state.py` | 鱼鱼的"身体"：三个数值怎么随时间变。**全项目最重要的 170 行** | 这里的错误是静默的——数据照记，全是废的。改完必跑 pytest |
@@ -76,7 +77,7 @@
 
 - **I1** heartbeat 不写记忆 → 执行点在 `scheduler.wake()` 末尾：`if kind == "event" and memory_text` 才写。
 - **I2** 模型输出不直接成为状态值 → 执行点在 `state.apply_felt_delta`（delta 除以 10 + clamp）和 `brain._clean_felt`（boredom 永远不在白名单里）。
-- **I3** 同时只有一个 wake → 执行点在 `scheduler.run` 的 `wake_lock`。
+- **I3** 同一时刻只有一条鱼、只有一个 wake → 两层：**进程级**在 `lock.py`（`data/fish.lock` 的 OS 锁，main 第一行抢，第二个进程直接拒启）；**进程内**在 `scheduler.run` 的 `wake_lock`（asyncio.Lock）。
 
 ## 改动影响速查（最常撞见的几种）
 

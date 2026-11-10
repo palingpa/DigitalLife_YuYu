@@ -7,10 +7,15 @@
 
 import asyncio
 
-from . import brain, config, db, feed, scheduler
+from . import brain, config, db, feed, lock, scheduler
 
 
 async def main() -> None:
+    # 单实例锁必须是第一件事：在任何数据库/日志写入之前就把第二条鱼拦住。
+    # 不区分 DRY_RUN / 真实模式——空跑撞上真跑同样拒绝（2026-11-11 事故）。
+    mode = "DRY_RUN" if config.DRY_RUN else "REAL"
+    lock.acquire(mode_label=mode)
+
     conn = db.connect()
     db.init_state(conn)
 
