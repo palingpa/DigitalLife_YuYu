@@ -35,7 +35,7 @@ CONTRACT = """你的回复必须是一个 JSON 对象，字段如下：
   "action": "tool" 或 "none",
   "tool": __TOOLS__,
   "args": {},
-  "why": "第一人称，不超过40字。空转也要写，'不想动'也是理由。",
+  "why": "第一人称，不超过40字。空转也要写。",
   "felt_delta": {"energy": -10到10, "valence": -10到10},
   "next_wake_in_min": 10到180之间的整数,
 }
