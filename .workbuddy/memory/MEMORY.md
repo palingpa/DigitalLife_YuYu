@@ -22,3 +22,12 @@
 ## 关键提醒
 - 提及用户用「她」（小帕是女性）。
 - 建仓顺序见 Design_v0.2.md §11：db → state(单测!) → prompt(打印肉眼查) → brain → scheduler(DRY_RUN) → tools → 72h 实跑。
+
+## 工作流程（2026-11-10 固定，硬性约定）
+背景：小帕会在对话中换模型（上下文断裂）且偶尔私下改代码（认知过期）。对策：
+- **项目根有 `PROJECT.md`（重入点：文档地图/不变量/当前状态/仪式）+ `DEVLOG.md`（追加式改动日志，"为什么"必填）**。
+- **开工仪式**：读 PROJECT.md → `git status --short --branch` + `git diff` + `git log --oneline -5`（diff 为唯一真相源）→ 读 DEVLOG 末尾 20 行。
+- **收工仪式**：动了 state.py/tests → pytest → 小步 commit → DEVLOG 追加。谁改谁提交，双方共用一条历史。
+- data/logs/backups/.workbuddy 不进 git；密钥只走环境变量。
+- git 身份为仓库级配置（user.name=Xiaopa）；我的提交可在 --author 标 Kite。
+- 换模型后不用对话续命：照 PROJECT.md + git diff + DEVLOG 即可重入。
