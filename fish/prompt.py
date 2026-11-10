@@ -73,12 +73,16 @@ def _relative_time(ts: str, now) -> str:
 
 
 def build_messages(conn: sqlite3.Connection, s: state_mod.State,
-                   now) -> tuple[list[dict], set[int]]:
+                   now, dry_run: bool = False) -> tuple[list[dict], set[int]]:
     """组装第一段上下文，同时返回「这一轮已经出现在她眼前」的记忆 id。
 
     返回 shown_ids 是为了给 recall 工具去重：同一段文字在一轮里重复出现
     不会产生新信息，只会让她误判「我记忆里只有这么点东西」（2026-11-10
     09:54 那次，她显式检索回来的正好是【想起来的事】刚展示过的三段）。
+
+    dry_run：空跑模式。True 时仍正常渲染【小帕】区块（供观察提示词），
+    但**跳过写库**（add_episodic / mark_seen）——空跑只观察不执行，否则会把
+    未读来信「消费掉」并污染记忆库。真正的短路在 scheduler.wake()。
     """
     last_wake = conn.execute(
         "SELECT ts FROM events ORDER BY ts DESC, id DESC LIMIT 1"
@@ -160,12 +164,16 @@ def build_messages(conn: sqlite3.Connection, s: state_mod.State,
         block_lines = []
         for m in unseen:
             # 存档为记忆：tag 小帕，让她记得「小帕联系过我」。
-            memory.add_episodic(
-                conn, f"[小帕] 小帕说：{m['text']}",
-                salience=0.6, tags=config.XIAOPA_MSG_TAG,
-            )
+            # DRY_RUN 下不写库——空跑只观察不执行，否则会污染记忆库 /
+            # 把未读消息标记为已读（等价于消费掉一次来信）。注意【小帕】区块
+            # 仍照常渲染，这样空跑时也能看到「有来信时会怎么呈现」。
+            if not dry_run:
+                memory.add_episodic(
+                    conn, f"[小帕] 小帕说：{m['text']}",
+                    salience=0.6, tags=config.XIAOPA_MSG_TAG,
+                )
+                msg_mod.mark_seen(conn, m["id"])
             block_lines.append(f"小帕（{m['ts'][:16]}）给你发了消息：{m['text']}")
-            msg_mod.mark_seen(conn, m["id"])
         user_parts.append("【小帕】\n" + "\n".join(block_lines) + "\n")
 
     # 已经在【最近在做的事】里作为「事后想法」出现过的，不再在【想起来的事】

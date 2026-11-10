@@ -113,10 +113,24 @@ async def wake(conn: sqlite3.Connection, client, trigger: str) -> None:
 
     before = (s.energy, s.valence, s.boredom)
 
-    messages, shown_ids = prompt.build_messages(conn, s, t0)
+    messages, shown_ids = prompt.build_messages(conn, s, t0, dry_run=config.DRY_RUN)
     d = await asyncio.to_thread(brain.decide, client, messages, tid)
     # to_thread：把同步的 API 调用丢进工作线程，避免卡住事件循环。
     # 这是「同步库 + asyncio 共存」的标准手法，值得记住。
+
+    # ── DRY_RUN 短路：只观察、不执行 ────────────────────────────────────
+    # 空跑语义是「不调 API、只打印上下文、记假决策」，绝不能真的 dispatch 工具、
+    # 真的给小帕发消息 / 写日记、或提交状态库。上面 brain.decide 在 DRY_RUN 下
+    # 走 _dry_run_decision：已把完整提示词写入 logs/last_prompt.txt、返回假决策
+    # （不花 token）；build_messages 也已按 dry_run 跳过写库。到这里必须直接返回，
+    # 否则会出现「假消息真发出去」——2026-11-11 因此产生了跨进程的孤儿轨迹。
+    if config.DRY_RUN:
+        trace.record("decision", tid, action=d.action, tool=d.tool, why=d.why,
+                     felt_delta=d.felt_delta, next_wake_in_min=d.next_wake_in_min,
+                     dry_run=True)
+        print(f"[DRY_RUN] 已生成假决策：action={d.action} tool={d.tool} "
+              f"why={d.why}（完整提示词见 logs/last_prompt.txt）trace_id={tid}")
+        return
 
     result = None
     reaction = None

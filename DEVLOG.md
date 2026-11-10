@@ -5,7 +5,17 @@
 > ## [YYYY-MM-DD HH:MM] 谁 · 一句话改动
 > **为什么**：……（没有为什么的改动不值得记）
 
-## [2026-11-11 00:55] Kite · 自省合并「关系叙事（relation）」，用真实往来做 grounding
+## [2026-11-11 01:23] Kite · 修 DRY_RUN 短路：空跑真正零副作用
+
+**为什么**：2026-11-11 00:55 出现「jsonl 有 tool_result 却无对应 decision、且数据库里什么都没落」的孤儿轨迹。根因：`brain.decide` 在 DRY_RUN 下不调 API 直接返回假决策，但 `wake()` 仍继续 dispatch 工具 + 写 event + commit——等于「假消息真发出去」。更隐蔽的是 `prompt.build_messages` 内部对未读来信直接 `add_episodic` + `mark_seen`，同样会污染记忆库 / 消费来信。用户确认修复。
+
+**改了什么**：
+- `fish/scheduler.py`：`wake()` 在 `brain.decide` 之后、任何 dispatch / 写库 / 自省之前，若 `config.DRY_RUN` 为真则 `trace.record("decision", dry_run=True)` + 打印后 `return`。彻底不 dispatch、不写 event、不 `state_mod.save`、不 `commit`、不触发 `_self_review`。
+- `fish/prompt.py`：`build_messages` 加 `dry_run=False` 参数；为 True 时仍渲染【小帕】区块（供观察提示词）但跳过 `add_episodic` / `mark_seen`。`wake()` 传 `dry_run=config.DRY_RUN`。
+- 测试：新增 `test_communication.py::test_dry_run_wake_has_no_side_effects`（零事件/零记忆/零 from_yuyu/状态不变/来信仍未被消费/提示词已渲染）。
+- pytest 78/78 绿。
+
+**边界**：`brain._dry_run_decision` 已把完整提示词写入 `logs/last_prompt.txt`（即「打印上下文」），空跑的观测价值保留；`brain.react` 的 DRY_RUN 分支现为 wake 路径上的死代码（防御性保留，不删以缩改动范围）。
 
 **为什么**：relation 层 schema/读写/渲染接口齐全，但全仓从未调用 `save_narrative(conn,"relation",...)`，永远为 None、永远显示「你还不太认识谁」。这是设计里接了线但没触发的死功能。通信模块上线后，小帕↔鱼鱼已有真实往来（messages 表），给「总结我认识了谁」提供了素材。用户拍板：①合并进现有自省（一次调用两层同步）②用 messages 真实往来做 grounding（防凭空编）③v1 不加长度闸门（只提示简短）。
 

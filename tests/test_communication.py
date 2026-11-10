@@ -187,3 +187,61 @@ def test_receiving_message_does_not_change_state(tmp_path, monkeypatch):
         (config.XIAOPA_MSG_TAG,),
     ).fetchone()["n"] == 1
     assert not msg_mod.has_unseen_to_yuyu(c)
+
+
+# ── 5. DRY_RUN 短路：只观察、不执行 ─────────────────────────────────────
+
+def test_dry_run_wake_has_no_side_effects(tmp_path, monkeypatch):
+    """空跑模式必须真的「零副作用」。
+
+    2026-11-11 的 bug：一个开 DRY_RUN 的进程仍走 dispatch + commit，
+    导致「假消息真发出去」、并产生跨进程的孤儿轨迹（jsonl 有 tool_result
+    却无对应 decision、且数据库里什么都没落）。
+
+    本测试验证 DRY_RUN 下 wake() 既不 dispatch 工具、也不写事件、不消费来信、
+    不新增记忆、不动状态库——只把提示词写到 logs/last_prompt.txt 供观察。
+    """
+    from fish import messages as msg_mod
+
+    monkeypatch.setattr(config, "DRY_RUN", True)
+    c = _conn(tmp_path, monkeypatch)
+
+    # 塞一封未读来信：若 build_messages 不守 dry_run，它会被 mark_seen + 落记忆
+    mid = msg_mod.post(c, "to_yuyu", "在吗？小帕想你了")
+
+    before = {
+        "wake_count": db.wake_count(c),
+        "memories": c.execute("SELECT COUNT(*) AS n FROM memories").fetchone()["n"],
+        "from_yuyu": c.execute(
+            "SELECT COUNT(*) AS n FROM messages WHERE direction='from_yuyu'"
+        ).fetchone()["n"],
+        "state": c.execute("SELECT energy, valence, boredom FROM state").fetchone(),
+    }
+
+    asyncio.run(scheduler.wake(c, None, trigger="test"))
+
+    after = {
+        "wake_count": db.wake_count(c),
+        "memories": c.execute("SELECT COUNT(*) AS n FROM memories").fetchone()["n"],
+        "from_yuyu": c.execute(
+            "SELECT COUNT(*) AS n FROM messages WHERE direction='from_yuyu'"
+        ).fetchone()["n"],
+        "state": c.execute("SELECT energy, valence, boredom FROM state").fetchone(),
+    }
+
+    # 事件计数不变：DRY_RUN 不插入 event
+    assert after["wake_count"] == before["wake_count"] == 0
+    # 没新增任何记忆（来信未被「渲染即 seen」落库）
+    assert after["memories"] == before["memories"]
+    # send_message 未被 dispatch（没有 from_yuyu 投递）
+    assert after["from_yuyu"] == before["from_yuyu"] == 0
+    # 状态库完全没动
+    assert after["state"] == before["state"]
+    # 关键：来信仍未被消费——保持未读，下一轮真实唤醒还能看到
+    assert msg_mod.has_unseen_to_yuyu(c) is True
+    assert msg_mod.fetch_unseen_to_yuyu(c)[0]["id"] == mid
+
+    # 观察产物：提示词里确实渲染了【小帕】区块（空跑时也能看到会怎么呈现）
+    log_path = config.LOGS_DIR / "last_prompt.txt"
+    assert log_path.exists()
+    assert "小帕想你了" in log_path.read_text(encoding="utf-8")
