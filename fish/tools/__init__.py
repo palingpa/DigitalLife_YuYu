@@ -288,8 +288,7 @@ ALL_TOOLS = [
     Tool("recall", "检索自己的记忆或日记", 1, _run_recall),
     Tool("web_search", "联网搜索", 1, _run_web_search),
     Tool("send_message", "给小帕发一条消息", 1, _run_send_message),
-    # 红线：desc 自然语言待小帕定稿；此工具让鱼鱼能主动重写自我叙事/关系叙事。
-    Tool("self_review", "【小帕定稿】主动做一次自我审视，重写「你是谁 / 你认识了谁」", 1, _run_self_review),
+    Tool("self_review", "改动一次【你是谁】/【你认识的人】", 1, _run_self_review),
 ]
 
 _TOOL_MAP = {t.name: t for t in ALL_TOOLS}
@@ -319,7 +318,7 @@ def describe(tools: list[Tool], s: state_mod.State) -> str:
         lines.append(f"- {t.name}: {t.desc} 参数形如 {t.args_hint}")
     hidden = [t for t in ALL_TOOLS if t not in tools]
     for t in hidden:
-        lines.append(f"- （{t.name} 现在用不了：太耗神，你现在的状态撑不住）")
+        lines.append(f"- （{t.name} 现在用不了：太耗精力，你现在的状态撑不住）")
     return "\n".join(lines)
 
 
