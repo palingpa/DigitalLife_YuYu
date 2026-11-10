@@ -260,13 +260,10 @@ def _run_send_message(conn: sqlite3.Connection, s, args: dict,
 
 ALL_TOOLS = [
     Tool("read_feed", "读一条还没读过的东西", 1, _run_read_feed),
-    Tool("write_journal", "写一段日记。适合有话想说的时候", 1, _run_write_journal),
+    Tool("write_journal", "写一段日记", 1, _run_write_journal),
     Tool("recall", "检索自己的记忆或日记", 1, _run_recall),
     Tool("web_search", "联网搜索", 1, _run_web_search),
-    # 红线：desc 是注入鱼鱼的提示词，措辞由小帕本人定稿。
-    # 当前为功能占位，她会改成自己满意的写法（措辞越中性越好，
-    # 避免强化「小帕」的存在感、抬高她主动发消息的概率）。
-    Tool("send_message", "给小帕发一句话", 1, _run_send_message),
+    Tool("send_message", "给小帕发一条消息", 1, _run_send_message),
 ]
 
 _TOOL_MAP = {t.name: t for t in ALL_TOOLS}

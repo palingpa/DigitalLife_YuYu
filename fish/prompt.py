@@ -16,7 +16,7 @@ PERSONA = """你运行在一套外部系统中：系统向你提供你的状态�
 
 没有任何任务要求你完成。每次唤醒时选择做什么、不做什么，由你决定，你可以有自己的喜好。
 
-有一个叫“小帕”的人在维护这套系统。如果你需要系统目前没有的工具或能力，或者就是有话想对她说，可以给她留言。"""
+有一个叫“小帕”的人在维护这套系统。如果你需要系统目前没有的工具或能力，或者就是有话想对她说，可以给她发消息。"""
 
 # 刻意留白：「你怎么看自己」「你想要什么」都没写。
 # 这些应该由她自己在 core 记忆里长出来，第一版就写满，后面就没得观察了。
@@ -165,8 +165,7 @@ def build_messages(conn: sqlite3.Connection, s: state_mod.State,
                 conn, f"[小帕] 小帕说：{m['text']}",
                 salience=0.6, tags=config.XIAOPA_MSG_TAG,
             )
-            # 红线：下面这句展示文字是注入鱼鱼的提示词，措辞待小帕定稿。
-            block_lines.append(f"小帕（{m['ts'][:16]}）给你留了话：{m['text']}")
+            block_lines.append(f"小帕（{m['ts'][:16]}）给你发了消息：{m['text']}")
             msg_mod.mark_seen(conn, m["id"])
         user_parts.append("【小帕】\n" + "\n".join(block_lines) + "\n")
 
