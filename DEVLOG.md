@@ -5,6 +5,21 @@
 > ## [YYYY-MM-DD HH:MM] 谁 · 一句话改动
 > **为什么**：……（没有为什么的改动不值得记）
 
+## [2026-11-11 00:55] Kite · 自省合并「关系叙事（relation）」，用真实往来做 grounding
+
+**为什么**：relation 层 schema/读写/渲染接口齐全，但全仓从未调用 `save_narrative(conn,"relation",...)`，永远为 None、永远显示「你还不太认识谁」。这是设计里接了线但没触发的死功能。通信模块上线后，小帕↔鱼鱼已有真实往来（messages 表），给「总结我认识了谁」提供了素材。用户拍板：①合并进现有自省（一次调用两层同步）②用 messages 真实往来做 grounding（防凭空编）③v1 不加长度闸门（只提示简短）。
+
+**改了什么**：
+- `config.py`：新增 `REVIEW_RELATION_EXCHANGES=20`（自省时取最近多少条往来做素材）
+- `fish/messages.py`：新增 `recent_exchanges(conn,limit)`（取近期双向往来，chrono 升序）+ `format_exchanges(rows)`（拼成 `[小帕]/[鱼鱼]` 文本）
+- `fish/prompt.py`：`build_review_messages` 扩展为 `(old_core, old_relation, exchanges)`，注入上一版 relation 与往来证据；`REVIEW_CONTRACT` 加 `new_relation` 字段说明（**措辞留【小帕定稿】占位，红线不代笔**）
+- `fish/brain.py`：`review_narrative` 返回 `dict|None`（含 new_core/new_relation），DRY_RUN 原样回传两者
+- `fish/scheduler.py`：`_self_review` 取 old_relation+往来证据，调新接口；relation v1 无闸门、非空即落库+记事件，与 core 保留率逻辑解耦；补 `messages` 导入
+- 测试：更新 `test_self_review_cap.py`（fake_review 改签名 + 3 例 relation 落库/拒空/解耦）、新增 `test_messages_exchanges.py`（3 例）
+- pytest 77/77 绿
+
+**注意（红线）**：`REVIEW_CONTRACT` 里 new_relation 那条的自然语言措辞是占位，由小帕定稿；代码只保证 parse 到 new_relation 字段。
+
 ## [2026-11-10 23:49] Kite · 自省叙事加长度闸门（软目标+硬上限），解「无限加长」
 
 **为什么**：用户观察到鱼鱼第 3 次自省最后两段已自己点破——「这份东西只会越来越长，长成一个可能不是我的形象」。根因：旧规则「不能删/推翻」+ 保留率闸门（≥0.6 即最多砍 40%）让 core 只能加长、且压不回来；core 每次唤醒都被注入，越长越稀释重点。用户已改规则首句允许「确认不匹配可删/改」，但只改措辞不够——代码闸门会卡住深度压缩。于是加两层闸 + 放宽保留率。

@@ -58,9 +58,9 @@ def _tmp_db():
     return conn
 
 
-async def _run_review(conn, new_core, monkeypatch):
-    def fake_review(client, old_core, trace_id=""):
-        return new_core
+async def _run_review(conn, new_core, monkeypatch, new_relation=None):
+    def fake_review(client, old_core, old_relation="", exchanges="", trace_id=""):
+        return {"new_core": new_core, "new_relation": new_relation}
     monkeypatch.setattr(scheduler.brain, "review_narrative", fake_review)
     await scheduler._self_review(conn, client=None, trace_id="t1")
 
@@ -90,3 +90,41 @@ def test_self_review_rejects_deep_cut_when_under_target(monkeypatch):
         "SELECT why FROM events WHERE kind='error' ORDER BY id DESC LIMIT 1"
     ).fetchone()
     assert row and "自省被拒" in row["why"]
+
+
+# ── 关系叙事（relation）：合并进同一轮自省，v1 无长度闸门 ──────────────────
+
+def test_self_review_saves_relation_when_provided(monkeypatch):
+    """模型给了 new_relation → 落库 + 记成功事件。"""
+    conn = _tmp_db()
+    memory.save_narrative(conn, "core", "甲甲甲甲甲甲。乙乙乙乙乙乙。")
+    asyncio.run(_run_review(conn, "甲甲甲甲甲甲。乙乙乙乙乙乙。", monkeypatch,
+                            new_relation="小帕是维护这套系统的人。"))
+    assert memory.get_narrative(conn, "relation") == "小帕是维护这套系统的人。"
+    row = conn.execute(
+        "SELECT why FROM events WHERE why LIKE '%关系叙事%' ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    assert row and "已更新" in row["why"]
+
+
+def test_self_review_skips_empty_relation(monkeypatch):
+    """new_relation 为空 → 不覆盖已有的 relation。"""
+    conn = _tmp_db()
+    memory.save_narrative(conn, "core", "甲甲甲甲甲甲。")
+    memory.save_narrative(conn, "relation", "旧关系还在")
+    asyncio.run(_run_review(conn, "甲甲甲甲甲甲。", monkeypatch, new_relation=None))
+    assert memory.get_narrative(conn, "relation") == "旧关系还在"
+
+
+def test_relation_saved_even_if_core_rejected(monkeypatch):
+    """core 因保留率被拒，但 relation 与 core 解耦，仍应落库。"""
+    monkeypatch.setattr(config, "SELF_REVIEW_TARGET_MAX", 10_000)
+    conn = _tmp_db()
+    old = "甲甲甲甲甲甲。乙乙乙乙乙乙。丙丙丙丙丙丙。"
+    memory.save_narrative(conn, "core", old)
+    asyncio.run(_run_review(conn, "甲甲甲甲甲甲。", monkeypatch,
+                            new_relation="小帕是维护者。"))
+    # core 被拒，原样保留
+    assert memory.get_narrative(conn, "core") == old
+    # relation 独立落库
+    assert memory.get_narrative(conn, "relation") == "小帕是维护者。"

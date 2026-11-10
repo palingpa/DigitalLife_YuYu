@@ -17,7 +17,7 @@ import json
 import re
 import sqlite3
 
-from . import brain, config, db, memory, prompt, state as state_mod, tools, trace, util
+from . import brain, config, db, memory, messages, prompt, state as state_mod, tools, trace, util
 
 # 单飞锁：同一时刻全宇宙只允许一个 wake 在跑（不变量 I3）
 wake_lock = asyncio.Lock()
@@ -278,34 +278,60 @@ def _review_decision(old: str, new: str) -> tuple[bool, str]:
 
 
 async def _self_review(conn: sqlite3.Connection, client, trace_id: str = "") -> None:
-    """核心记忆自省：重写自我叙事（Design_v0.2 §5.3）。
+    """核心记忆自省：重写自我叙事 + 关系叙事（Design_v0.2 §5.3）。
 
     闸门是「旧版有多少被保留」，不是「新旧有多像」。前者允许生长
     （追加、改写措辞），后者只允许逐字复述——那会让 core 永远停在
     第一次写下的长度上。
+
+    关系叙事（relation）v1 不做长度闸门，与 core 解耦：只要模型给了
+    非空 new_relation 就落库，由提示词劝它简短。core 仍走原保留率逻辑。
+    两者独立落库——即使 core 因保留率被拒，关系更新也照常保存。
     """
-    old = memory.get_narrative(conn, "core")
+    old_core = memory.get_narrative(conn, "core")
+    old_relation = memory.get_narrative(conn, "relation")
     # 冷启动时没有「上一版」。喂给模型的必须是占位符而不是 None，
     # 否则 build_review_messages 会拼出「【你现在的自我叙事】None」。
-    seed = old if old is not None else prompt.CORE_PLACEHOLDER
+    seed_core = old_core if old_core is not None else prompt.CORE_PLACEHOLDER
+    seed_relation = old_relation if old_relation is not None else ""
 
-    new = await asyncio.to_thread(brain.review_narrative, client, seed, trace_id)
-    if not new:
+    rows = messages.recent_exchanges(conn, limit=config.REVIEW_RELATION_EXCHANGES)
+    exchanges = messages.format_exchanges(rows)
+
+    result = await asyncio.to_thread(
+        brain.review_narrative, client, seed_core, seed_relation, exchanges, trace_id
+    )
+    if not result:
         return
+    new_core = result.get("new_core")
+    new_relation = result.get("new_relation")
 
-    if old is None:
-        # 第一版没有比较对象，不设闸门。但要记一条事件，
-        # 否则「core 什么时候长出来的」在日志里是空白。
-        memory.save_narrative(conn, "core", new)
+    # ── 关系叙事：v1 无闸门，非空即落库 + 记事件 ──
+    if new_relation:
+        memory.save_narrative(conn, "relation", new_relation)
         conn.execute(
             """INSERT INTO events (ts, kind, trigger, why, trace_id)
                VALUES (?, 'self_review', 'self_review', ?, ?)""",
-            (util.now_iso(), f"自我叙事首次建立（{len(new)}字）", trace_id or None),
+            (util.now_iso(), f"关系叙事已更新（{len(new_relation)}字）", trace_id or None),
+        )
+        conn.commit()
+
+    # ── 自我叙事：沿用既有保留率闸门 ──
+    if not new_core:
+        return
+    if old_core is None:
+        # 第一版没有比较对象，不设闸门。但要记一条事件，
+        # 否则「core 什么时候长出来的」在日志里是空白。
+        memory.save_narrative(conn, "core", new_core)
+        conn.execute(
+            """INSERT INTO events (ts, kind, trigger, why, trace_id)
+               VALUES (?, 'self_review', 'self_review', ?, ?)""",
+            (util.now_iso(), f"自我叙事首次建立（{len(new_core)}字）", trace_id or None),
         )
         conn.commit()
         return
 
-    accepted, detail = _review_decision(old, new)
+    accepted, detail = _review_decision(old_core, new_core)
     if not accepted:
         conn.execute(
             """INSERT INTO events (ts, kind, trigger, why, trace_id)
@@ -315,7 +341,7 @@ async def _self_review(conn: sqlite3.Connection, client, trace_id: str = "") -> 
         conn.commit()
         return
 
-    memory.save_narrative(conn, "core", new)
+    memory.save_narrative(conn, "core", new_core)
     conn.execute(
         """INSERT INTO events (ts, kind, trigger, why, trace_id)
            VALUES (?, 'self_review', 'self_review', ?, ?)""",

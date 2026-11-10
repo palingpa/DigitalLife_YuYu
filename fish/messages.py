@@ -77,3 +77,30 @@ def mark_delivered(conn: sqlite3.Connection, msg_id: int) -> None:
     """标记某条 from_yuyu 消息已送达小帕（收件脚本执行）。"""
     conn.execute("UPDATE messages SET delivered_to_xiaopa=1 WHERE id=?", (msg_id,))
     conn.commit()
+
+
+def recent_exchanges(conn: sqlite3.Connection, limit: int = 20) -> list[sqlite3.Row]:
+    """取最近若干条双向往来（to_yuyu + from_yuyu），按时间升序（老信在前）。
+
+    用途：自省时作为「你和小帕之间发生过什么」的素材（grounding），
+    让她据此归纳关系，而不是凭空编。只取、不判，是否采用由自省逻辑决定。
+    """
+    rows = conn.execute(
+        "SELECT * FROM messages ORDER BY ts DESC, id DESC LIMIT ?", (limit,)
+    ).fetchall()
+    return list(reversed(rows))   # 转回时间升序，读起来自然
+
+
+def format_exchanges(rows: list[sqlite3.Row]) -> str:
+    """把往来行拼成给模型看的纯文本。
+
+    to_yuyu（小帕→鱼鱼）标注为「小帕」，from_yuyu（鱼鱼→小帕）标注为「鱼鱼」。
+    无内容时返回空串，调用方据此决定是否注入。
+    """
+    if not rows:
+        return ""
+    out = []
+    for r in rows:
+        who = "小帕" if r["direction"] == "to_yuyu" else "鱼鱼"
+        out.append(f"[{who}] {r['text']}")
+    return "\n".join(out)

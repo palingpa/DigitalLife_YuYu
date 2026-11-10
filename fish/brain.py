@@ -257,17 +257,26 @@ def _dry_run_decision(messages: list[dict]) -> Decision:
     )
 
 
-def review_narrative(client, old_core: str, trace_id: str = "") -> str | None:
-    """自省：请求重写自我叙事。
+def review_narrative(client, old_core: str, old_relation: str = "",
+                     exchanges: str = "", trace_id: str = "") -> dict | None:
+    """自省：请求重写自我叙事 + 关系叙事。
 
-    返回新版文本；保留率检查与写入由调用方（scheduler）负责，
-    因为保留率门槛是「制度」，不是「能力」——它不该由模型感知。
+    返回 {"new_core": str|None, "new_relation": str|None}；解析失败返回 None。
+    保留率检查与写入由调用方（scheduler）负责，因为保留率门槛是「制度」，
+    不是「能力」——它不该由模型感知。relation 的落库规则也由 scheduler 决定。
     """
     if config.DRY_RUN:
-        return old_core  # 空跑模式不自省，原样返回
-    reply = _call_api(client, prompt.build_review_messages(old_core), 0.7, trace_id)
+        # 空跑模式不自省，原样回传当前两版（不会落库，scheduler 不写）
+        return {"new_core": old_core, "new_relation": old_relation or ""}
+    reply = _call_api(
+        client,
+        prompt.build_review_messages(old_core, old_relation, exchanges),
+        0.7, trace_id,
+    )
     try:
-        new_core = json.loads(reply.content).get("new_core")
-        return str(new_core).strip() or None
+        data = json.loads(reply.content)
+        new_core = str(data.get("new_core") or "").strip() or None
+        new_relation = str(data.get("new_relation") or "").strip() or None
+        return {"new_core": new_core, "new_relation": new_relation}
     except (json.JSONDecodeError, AttributeError):
         return None

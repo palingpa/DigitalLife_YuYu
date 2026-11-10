@@ -251,15 +251,33 @@ def build_reaction_messages(base_messages: list[dict], decision_raw: str,
 
 # ── 自省专用（Design_v0.2 §5.3）────────────────────────────────────────
 
+# 小帕定稿：下面 REVIEW_CONTRACT 里「new_relation」那一条的自然语言措辞由小帕修改（红线）。
+# 功能性占位已给出，保证 parse 得到 new_relation 字段；措辞请你按意图定稿。
 REVIEW_CONTRACT = """现在要做一次自省：重写你的「你是谁」。
 规则：
 - 可以追加新内容，如果你确认当前版本和你的自我认知有不匹配的地方，可以适当删除或修改
 - 尽量控制在 600 字左右，若超出太多，可适当压缩，但要保留你最重要的自我认知
-- 输出 JSON：{"new_core": "重写后的自我叙事", "reason": "为什么这么改"}"""
+- 另外，请在返回的 JSON 里增加 "new_relation" 字段：用朴素语言、约 300 字以内，记下你和小帕之间关系的变化，或你对她的认识。若这一轮没有新的可记，就原样返回上一版或留空字符串。
+- 输出 JSON：{"new_core": "重写后的自我叙事", "new_relation": "你对小帕等人的关系认识（无变化可留空）", "reason": "为什么这么改"}"""
 
 
-def build_review_messages(old_core: str) -> list[dict]:
+def build_review_messages(old_core: str,
+                          old_relation: str | None = None,
+                          exchanges: str = "") -> list[dict]:
+    """拼自省用的 messages。
+
+    old_relation / exchanges 都是可选的 grounding：
+    - old_relation：上一版关系叙事（没有就不给，模型从空起）。
+    - exchanges：近期真实往来文本（messages 表），让她据此归纳，而非凭空编。
+    """
+    user = f"【你现在的自我叙事】\n{old_core}\n"
+    if old_relation:
+        user += f"\n【你对自己人际关系的认识（上一版）】\n{old_relation}\n"
+    if exchanges.strip():
+        user += (f"\n【近期你和小帕之间的往来，仅供参考，不是要你复述】\n"
+                 f"{exchanges}\n")
+    user += "\n重写它。用 JSON 回复。"
     return [
         {"role": "system", "content": PERSONA + "\n\n" + REVIEW_CONTRACT},
-        {"role": "user", "content": f"【你现在的自我叙事】\n{old_core}\n\n重写它。用 JSON 回复。"},
+        {"role": "user", "content": user},
     ]

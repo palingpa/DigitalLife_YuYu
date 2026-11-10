@@ -123,6 +123,9 @@ SELF_REVIEW_HARD_MAX = 1200      # 自我叙事的「硬上限」长度（字符
 # 当旧版已超过 target 时，允许她比平时切得更深（向 target 靠拢），否则保留率
 # 闸门会把她钉在「最多砍 40%」而永远压不下来。0.3 是下限，防一把推翻自己。
 SELF_REVIEW_MIN_RETENTION_OVER_TARGET = 0.3
+# 自省时，从 messages 表取最近多少条双向往来作为「你认识了谁」的素材（grounding）。
+# 不为 0 即启用；关系叙事 v1 无长度闸门，只靠提示词劝简短。
+REVIEW_RELATION_EXCHANGES = 20
 
 # ── 世界输入（Design_v0.2 §13.2）───────────────────────────────────────
 FEED_INTERVAL_MIN = 120    # 每 2 小时抓一次信息源
