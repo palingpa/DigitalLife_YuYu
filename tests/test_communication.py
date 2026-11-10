@@ -52,7 +52,7 @@ def test_messages_empty_text_not_written(tmp_path, monkeypatch):
 def test_from_yuyu_delivery_flag(tmp_path, monkeypatch):
     from fish import messages as msg_mod
     c = _conn(tmp_path, monkeypatch)
-    msg_mod.post(c, "from_yuyu", "我挺好的")
+    msg_mod.post(c, "from_yuyu", "这是一条测试消息")
     undelivered = msg_mod.fetch_undelivered_from_yuyu(c)
     assert len(undelivered) == 1
     msg_mod.mark_delivered(c, undelivered[0]["id"])
@@ -64,13 +64,13 @@ def test_from_yuyu_delivery_flag(tmp_path, monkeypatch):
 def test_xiaopa_block_renders_once_and_persists_memory(tmp_path, monkeypatch):
     from fish import messages as msg_mod
     c = _conn(tmp_path, monkeypatch)
-    msg_mod.post(c, "to_yuyu", "今天天气真好")
+    msg_mod.post(c, "to_yuyu", "这是一条测试消息")
 
     now = util.now()
     msgs, _ = prompt.build_messages(c, state.load(c), now)
     content = msgs[-1]["content"]
     assert "【小帕】" in content
-    assert "今天天气真好" in content
+    assert "这是一条测试消息" in content
 
     # 落了一条「小帕来信」记忆，tag 正确
     rows = c.execute(
@@ -78,7 +78,7 @@ def test_xiaopa_block_renders_once_and_persists_memory(tmp_path, monkeypatch):
         (config.XIAOPA_MSG_TAG,),
     ).fetchall()
     assert len(rows) == 1
-    assert "今天天气真好" in rows[0]["content"]
+    assert "这是一条测试消息" in rows[0]["content"]
 
     # 渲染即 seen：下一轮不再渲染、不再加记忆（同封来信不落两条）
     assert not msg_mod.has_unseen_to_yuyu(c)
@@ -100,7 +100,7 @@ def test_send_message_single_pass_and_delivers(tmp_path, monkeypatch):
     def fake_decide(client, messages, tid):
         return Decision(
             action="tool", tool="send_message",
-            args={"text": "小帕，我今天读了篇好文章。"},
+            args={"text": "这是一条测试消息"},
             felt_delta={"energy": 0, "valence": 0},
             why="想告诉小帕", next_wake_in_min=30,
         )
@@ -129,7 +129,7 @@ def test_send_message_single_pass_and_delivers(tmp_path, monkeypatch):
     froms = c.execute("SELECT text, direction FROM messages").fetchall()
     assert len(froms) == 1
     assert froms[0]["direction"] == "from_yuyu"
-    assert froms[0]["text"] == "小帕，我今天读了篇好文章。"
+    assert froms[0]["text"] == "这是一条测试消息"
 
     # 4) valence 只受工具效果 +2（第一段 felt_delta 为 0，无第二段自报）
     assert after_v == before_v + 2.0
@@ -140,7 +140,7 @@ def test_send_message_single_pass_and_delivers(tmp_path, monkeypatch):
 def test_should_wake_xiaopa_when_pending_and_gap_ok(tmp_path, monkeypatch):
     from fish import messages as msg_mod
     c = _conn(tmp_path, monkeypatch)
-    msg_mod.post(c, "to_yuyu", "在吗？")
+    msg_mod.post(c, "to_yuyu", "这是一条测试消息")
     go, trig = scheduler._should_wake(c, state.load(c), util.now())
     assert go and trig == "xiaopa"
 
@@ -148,7 +148,7 @@ def test_should_wake_xiaopa_when_pending_and_gap_ok(tmp_path, monkeypatch):
 def test_should_wake_xiaopa_suppressed_within_min_gap(tmp_path, monkeypatch):
     from fish import messages as msg_mod
     c = _conn(tmp_path, monkeypatch)
-    msg_mod.post(c, "to_yuyu", "在吗？")
+    msg_mod.post(c, "to_yuyu", "这是一条测试消息")
     # 一条 1 分钟前、设定 60 分钟后才醒的事件 → 未满 2 分钟最小间隔
     recent = (util.now() - timedelta(minutes=1)).isoformat(timespec="seconds")
     c.execute(
@@ -165,13 +165,13 @@ def test_receiving_message_does_not_change_state(tmp_path, monkeypatch):
     """收到消息这件事本身不改状态（无 boredom 缓解、无强制情绪）。"""
     from fish import messages as msg_mod
     c = _conn(tmp_path, monkeypatch)
-    msg_mod.post(c, "to_yuyu", "想你了")
+    msg_mod.post(c, "to_yuyu", "这是一条测试消息")
 
     def fake_decide(client, messages, tid):
         # 空转：不做事，felt_delta 为 0
         return Decision(action="none", tool=None, args={},
                         felt_delta={"energy": 0, "valence": 0},
-                        why="只是发呆", next_wake_in_min=30)
+                        why="这是一条测试原因", next_wake_in_min=30)
 
     monkeypatch.setattr("fish.brain.decide", fake_decide)
 
@@ -207,7 +207,7 @@ def test_dry_run_wake_has_no_side_effects(tmp_path, monkeypatch):
     c = _conn(tmp_path, monkeypatch)
 
     # 塞一封未读来信：若 build_messages 不守 dry_run，它会被 mark_seen + 落记忆
-    mid = msg_mod.post(c, "to_yuyu", "在吗？小帕想你了")
+    mid = msg_mod.post(c, "to_yuyu", "这是一条测试消息")
 
     before = {
         "wake_count": db.wake_count(c),
@@ -244,4 +244,4 @@ def test_dry_run_wake_has_no_side_effects(tmp_path, monkeypatch):
     # 观察产物：提示词里确实渲染了【小帕】区块（空跑时也能看到会怎么呈现）
     log_path = config.LOGS_DIR / "last_prompt.txt"
     assert log_path.exists()
-    assert "小帕想你了" in log_path.read_text(encoding="utf-8")
+    assert "这是一条测试消息" in log_path.read_text(encoding="utf-8")

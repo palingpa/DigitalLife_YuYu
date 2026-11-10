@@ -24,7 +24,7 @@ def test_write_journal_skips_second_pass(tmp_path, monkeypatch):
         # 第一段：她决定主动写一段日记
         return Decision(
             action="tool", tool="write_journal",
-            args={"text": "今天有点累，但写下来心里松快了。"},
+            args={"text": "这是一条测试日记"},
             felt_delta={"energy": 0, "valence": 0},
             why="想留下这段话", next_wake_in_min=30,
         )
