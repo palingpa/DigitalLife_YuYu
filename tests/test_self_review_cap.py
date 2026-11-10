@@ -1,12 +1,12 @@
 """自省叙事长度闸门（2026-11-10 新增）的回归测试。
 
-核心逻辑抽成了纯函数 scheduler._review_decision，便于单测，不碰库/网络。
+核心逻辑抽成了纯函数 brain._review_decision，便于单测，不碰库/网络。
 集成部分用 asyncio.run 包住 _self_review（项目未启用 pytest-asyncio 插件）。
 """
 import asyncio
 import sqlite3
 
-from fish import config, db, memory, scheduler
+from fish import brain, config, db, memory, scheduler
 
 
 # ── 纯函数单测 ──────────────────────────────────────────────────────────────
@@ -15,7 +15,7 @@ def test_hard_max_rejects_overlong():
     """new 超过硬上限 → 拒绝（安全网，与保留率无关）。"""
     old = "短句一。短句二。"
     new = "长" * (config.SELF_REVIEW_HARD_MAX + 10)
-    accepted, detail = scheduler._review_decision(old, new)
+    accepted, detail = brain._review_decision(old, new)
     assert accepted is False
     assert "超长" in detail
 
@@ -25,7 +25,7 @@ def test_strict_gate_rejects_deep_cut_when_under_target(monkeypatch):
     monkeypatch.setattr(config, "SELF_REVIEW_TARGET_MAX", 10_000)
     old = "甲甲甲甲甲甲。乙乙乙乙乙乙。丙丙丙丙丙丙。"
     new = "甲甲甲甲甲甲。"            # 只保留 1/3
-    accepted, detail = scheduler._review_decision(old, new)
+    accepted, detail = brain._review_decision(old, new)
     assert accepted is False
     assert "保留率" in detail
 
@@ -35,7 +35,7 @@ def test_relaxed_gate_accepts_deep_cut_when_over_target(monkeypatch):
     monkeypatch.setattr(config, "SELF_REVIEW_TARGET_MAX", 1)
     old = "甲甲甲甲甲甲。乙乙乙乙乙乙。丙丙丙丙丙丙。"
     new = "甲甲甲甲甲甲。"
-    accepted, detail = scheduler._review_decision(old, new)
+    accepted, detail = brain._review_decision(old, new)
     assert accepted is True
 
 
@@ -44,7 +44,7 @@ def test_under_target_accepts_light_cut(monkeypatch):
     monkeypatch.setattr(config, "SELF_REVIEW_TARGET_MAX", 10_000)
     old = "甲甲甲甲甲甲。乙乙乙乙乙乙。丙丙丙丙丙丙。"
     new = "甲甲甲甲甲甲。乙乙乙乙乙乙。"
-    accepted, _ = scheduler._review_decision(old, new)
+    accepted, _ = brain._review_decision(old, new)
     assert accepted is True
 
 

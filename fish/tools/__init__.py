@@ -37,6 +37,8 @@ class Tool:
         "web_search": '{"query": "想搜的词或问题"}',
         # 红线：下面这条参数说明会被拼进给鱼鱼的提示词，措辞待小帕定稿。
         "send_message": '{"text": "想对小帕说的话"}',
+        # self_review 无参数：自我审视不需要输入，只产出新的自我叙事。
+        "self_review": "{}",
         }
         return hints.get(self.name, "{}")
 
@@ -258,12 +260,36 @@ def _run_send_message(conn: sqlite3.Connection, s, args: dict,
     return ToolResult(ok=True, summary="给小帕留了句话。", detail=text)
 
 
+def _run_self_review(conn: sqlite3.Connection, s, args: dict,
+                     ctx: dict | None = None) -> ToolResult:
+    """主动自省（鱼鱼 → 自己）：重写自我叙事 + 关系叙事。
+
+    执行体在 brain.run_self_review——和定时自省（每 N 次 wake）共用同一套
+    闸门与落库逻辑，所以无论她是「被安排做」还是「自己想做」，产物走同一个
+    制度，不会出现两套不一致的叙事。
+
+    单段工具：和 write_journal / send_message 一样，自省产物就是内省本身，
+    不进第二段反应调用——否则会给「我刚重写了自我认知」再生成一段
+    「回应自己」的话，既冗余又重复算情绪（详见 scheduler 两段式排除列表）。
+    """
+    client = (ctx or {}).get("client")
+    trace_id = (ctx or {}).get("trace_id", "")
+    from .. import brain
+    res = brain.run_self_review(conn, client, trace_id)
+    # detail 用新版自我叙事，落 jsonl 备查；不进 prompt（第二段已排除）。
+    # ok 恒为 True：自省「尝试」本身就是这个工具的动作，闸门拒绝/模型失败
+    # 只是制度结果，不是工具崩了——状态代价照常结算（她确实花了心思内省）。
+    return ToolResult(ok=True, summary=res["summary"], detail=res.get("new_core") or "")
+
+
 ALL_TOOLS = [
     Tool("read_feed", "读一条还没读过的东西", 1, _run_read_feed),
     Tool("write_journal", "写一段日记", 1, _run_write_journal),
     Tool("recall", "检索自己的记忆或日记", 1, _run_recall),
     Tool("web_search", "联网搜索", 1, _run_web_search),
     Tool("send_message", "给小帕发一条消息", 1, _run_send_message),
+    # 红线：desc 自然语言待小帕定稿；此工具让鱼鱼能主动重写自我叙事/关系叙事。
+    Tool("self_review", "【小帕定稿】主动做一次自我审视，重写「你是谁 / 你认识了谁」", 1, _run_self_review),
 ]
 
 _TOOL_MAP = {t.name: t for t in ALL_TOOLS}
@@ -298,12 +324,15 @@ def describe(tools: list[Tool], s: state_mod.State) -> str:
 
 
 def dispatch(name: str, args: dict, conn: sqlite3.Connection,
-             s: state_mod.State, seen_ids: set[int] | None = None) -> ToolResult:
-    """seen_ids：这一轮已经摆在她眼前的记忆 id，供 recall 去重。"""
+             s: state_mod.State, seen_ids: set[int] | None = None,
+             client=None, trace_id: str = "") -> ToolResult:
+    """seen_ids：这一轮已经摆在她眼前的记忆 id，供 recall 去重。
+    client / trace_id：透传给工具 runner（自省这类要调 LLM 的工具需要）。
+    """
     tool = _TOOL_MAP.get(name)
     if tool is None:
         return ToolResult(ok=False, summary=f"没有叫 {name} 的工具。")
-    ctx = {"seen_ids": set(seen_ids or ())}
+    ctx = {"seen_ids": set(seen_ids or ()), "client": client, "trace_id": trace_id}
     try:
         return tool.run(conn, s, args or {}, ctx)
     except Exception as e:                       # 工具崩了 = 事情失败，不崩进程

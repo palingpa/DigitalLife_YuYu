@@ -17,7 +17,7 @@ import json
 import re
 import sqlite3
 
-from . import brain, config, db, memory, messages, prompt, state as state_mod, tools, trace, util
+from . import brain, config, db, memory, prompt, state as state_mod, tools, trace, util
 
 # 单飞锁：同一时刻全宇宙只允许一个 wake 在跑（不变量 I3）
 wake_lock = asyncio.Lock()
@@ -137,7 +137,8 @@ async def wake(conn: sqlite3.Connection, client, trigger: str) -> None:
     memory_text = ""
 
     if d.action == "tool" and d.tool:
-        result = tools.dispatch(d.tool, d.args, conn, s, seen_ids=shown_ids)
+        result = tools.dispatch(d.tool, d.args, conn, s, seen_ids=shown_ids,
+                                client=client, trace_id=tid)
         ok = result.ok
 
         # 工具返回的完整内容也进轨迹：summary 给模型看，detail 只在这里留底。
@@ -153,7 +154,8 @@ async def wake(conn: sqlite3.Connection, client, trigger: str) -> None:
         # send_message 同理：给小帕的一句话写完即止，不进第二段，否则会给
         # 「我给小帕发了句话」再生成一段「回应自己的话」，既冗余又重复算情绪。
         # 空转和失败没有 detail，也就不多花那一次调用。
-        if ok and (result.detail or "").strip() and d.tool not in ("write_journal", "send_message"):
+        if ok and (result.detail or "").strip() and d.tool not in (
+                "write_journal", "send_message", "self_review"):
             reaction = await asyncio.to_thread(
                 brain.react, client, messages, d, d.tool,
                 result.summary, result.detail, tid,
@@ -235,8 +237,10 @@ async def wake(conn: sqlite3.Connection, client, trigger: str) -> None:
             source_event_id=cur.lastrowid,
         )
 
-    # 自省：每 N 次 wake 重写一次自我叙事（Design_v0.2 §5.3）
-    if db.wake_count(conn) % config.SELF_REVIEW_EVERY == 0:
+    # 自省：每 N 次 wake 重写一次自我叙事（Design_v0.2 §5.3）。
+    # 同轮守卫：如果她这一轮自己选了 self_review 工具，就不再强制自动自省，
+    # 避免「主动做一次 + 定时又来一次」重复刷新同一份叙事。
+    if db.wake_count(conn) % config.SELF_REVIEW_EVERY == 0 and d.tool != "self_review":
         # 自省是「制度」，不是「能力」：它坏了不该拖垮整次唤醒。
         # 注意 state_mod.save 在下面——这里一旦抛异常，这次唤醒的
         # 状态变更就全部丢失，而 events 已经写进去了，账会对不上。
@@ -250,118 +254,25 @@ async def wake(conn: sqlite3.Connection, client, trigger: str) -> None:
     conn.commit()
 
 
-def _retained_ratio(old: str, new: str) -> float:
-    """旧叙事有多大比例被新版保留（单向：新增内容不加分也不扣分）。
+# 保留率闸门（_retained_ratio / _review_decision）已迁到 brain.py：
+# 「执行自省」既要被定时路径调用、又要被 self_review 工具调用，放在 brain
+# 这一层谁 import 都不会成环（scheduler / tools 都 import brain，brain 不回 import 它们）。
 
-    这里刻意不用 difflib.ratio()：它的分母含新文本长度，于是「往后追加
-    一句」会让分数掉到 0.5 上下被当成漂移拒掉——而追加恰恰是自我叙事
-    最正常的生长方式。改成按句子算「旧内容有多少被保留」，只有删掉或
-    推翻才会低分。阈值见 config.SELF_REVIEW_MIN_RETENTION。
-    """
-    sents = [s for s in re.split(r"[。！？\n]", old) if len(s.strip()) >= 4]
-    if not sents:
-        return 1.0
-    total = 0.0
-    for s in sents:
-        sm = difflib.SequenceMatcher(None, s, new, autojunk=False)
-        # 匹配块求和，而不是只取最长一段：一句话中间改几个字，
-        # 不该被判成「这句没保留」。
-        total += sum(b.size for b in sm.get_matching_blocks()) / len(s)
-    return total / len(sents)
-
-
-def _review_decision(old: str, new: str) -> tuple[bool, str]:
-    """决定自省结果是否被接受。纯函数，便于单测，不碰数据库/网络。
-
-    返回 (accepted, detail)：detail 用于事件日志，调用方再按接受/拒绝加前缀。
-    两层闸：
-      1) 硬上限：new 超过 SELF_REVIEW_HARD_MAX → 拒绝（安全网，正常几乎不触发）。
-      2) 保留率：平时要求保留 ≥MIN_RETENTION 的旧句（防一把推翻自己）；
-         但旧版已超软目标时放宽到 MIN_RETENTION_OVER_TARGET，允许往 target 压。
-    """
-    if len(new) > config.SELF_REVIEW_HARD_MAX:
-        return False, (f"超长：{len(new)} > {config.SELF_REVIEW_HARD_MAX}"
-                       f"（保留上一版，下轮请压缩）")
-    eff_min = (config.SELF_REVIEW_MIN_RETENTION_OVER_TARGET
-               if len(old) > config.SELF_REVIEW_TARGET_MAX
-               else config.SELF_REVIEW_MIN_RETENTION)
-    retained = _retained_ratio(old, new)
-    if retained < eff_min:
-        return False, f"保留率 {retained:.2f} < {eff_min}（旧叙事被删太多）"
-    return True, f"保留率 {retained:.2f}，{len(old)}→{len(new)}字"
 
 
 async def _self_review(conn: sqlite3.Connection, client, trace_id: str = "") -> None:
     """核心记忆自省：重写自我叙事 + 关系叙事（Design_v0.2 §5.3）。
 
-    闸门是「旧版有多少被保留」，不是「新旧有多像」。前者允许生长
-    （追加、改写措辞），后者只允许逐字复述——那会让 core 永远停在
-    第一次写下的长度上。
+    执行体在 brain.run_self_review——定时路径与 self_review 工具共用
+    同一套闸门/落库逻辑，不会出现两套不一致的叙事。
 
-    关系叙事（relation）v1 不做长度闸门，与 core 解耦：只要模型给了
-    非空 new_relation 就落库，由提示词劝它简短。core 仍走原保留率逻辑。
-    两者独立落库——即使 core 因保留率被拒，关系更新也照常保存。
+    注意：run_self_review 必须同步、在当前（事件循环）线程里跑。它会用
+    conn 做落库，而 SQLite 连接不能跨线程使用——所以这里不能用
+    asyncio.to_thread 包它（那会把主线程的 conn 丢进工作线程报错）。
+    自省里的那次 LLM 调用会短暂阻塞事件循环，但每 10 次唤醒才发生一次，
+    可接受；工具路径同理（dispatch 本就在主线程同步执行）。
     """
-    old_core = memory.get_narrative(conn, "core")
-    old_relation = memory.get_narrative(conn, "relation")
-    # 冷启动时没有「上一版」。喂给模型的必须是占位符而不是 None，
-    # 否则 build_review_messages 会拼出「【你现在的自我叙事】None」。
-    seed_core = old_core if old_core is not None else prompt.CORE_PLACEHOLDER
-    seed_relation = old_relation if old_relation is not None else ""
-
-    rows = messages.recent_exchanges(conn, limit=config.REVIEW_RELATION_EXCHANGES)
-    exchanges = messages.format_exchanges(rows)
-
-    result = await asyncio.to_thread(
-        brain.review_narrative, client, seed_core, seed_relation, exchanges, trace_id
-    )
-    if not result:
-        return
-    new_core = result.get("new_core")
-    new_relation = result.get("new_relation")
-
-    # ── 关系叙事：v1 无闸门，非空即落库 + 记事件 ──
-    if new_relation:
-        memory.save_narrative(conn, "relation", new_relation)
-        conn.execute(
-            """INSERT INTO events (ts, kind, trigger, why, trace_id)
-               VALUES (?, 'self_review', 'self_review', ?, ?)""",
-            (util.now_iso(), f"关系叙事已更新（{len(new_relation)}字）", trace_id or None),
-        )
-        conn.commit()
-
-    # ── 自我叙事：沿用既有保留率闸门 ──
-    if not new_core:
-        return
-    if old_core is None:
-        # 第一版没有比较对象，不设闸门。但要记一条事件，
-        # 否则「core 什么时候长出来的」在日志里是空白。
-        memory.save_narrative(conn, "core", new_core)
-        conn.execute(
-            """INSERT INTO events (ts, kind, trigger, why, trace_id)
-               VALUES (?, 'self_review', 'self_review', ?, ?)""",
-            (util.now_iso(), f"自我叙事首次建立（{len(new_core)}字）", trace_id or None),
-        )
-        conn.commit()
-        return
-
-    accepted, detail = _review_decision(old_core, new_core)
-    if not accepted:
-        conn.execute(
-            """INSERT INTO events (ts, kind, trigger, why, trace_id)
-               VALUES (?, 'error', 'self_review', ?, ?)""",
-            (util.now_iso(), f"自省被拒：{detail}", trace_id or None),
-        )
-        conn.commit()
-        return
-
-    memory.save_narrative(conn, "core", new_core)
-    conn.execute(
-        """INSERT INTO events (ts, kind, trigger, why, trace_id)
-           VALUES (?, 'self_review', 'self_review', ?, ?)""",
-        (util.now_iso(), f"自我叙事已更新（{detail}）", trace_id or None),
-    )
-    conn.commit()
+    brain.run_self_review(conn, client, trace_id)
 
 
 # ── 主循环 ───────────────────────────────────────────────────────────────

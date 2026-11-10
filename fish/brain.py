@@ -10,11 +10,14 @@ reasoning_content 字段里，和正式的 content 分开返回。
 不然 Prompt 里那句「why」只是结论，看不到她怎么绕到那的。
 """
 
+import difflib
 import json
+import re
+import sqlite3
 import time
 from dataclasses import dataclass, field
 
-from . import config, prompt, state as state_mod, trace
+from . import config, prompt, state as state_mod, trace, util
 
 
 @dataclass
@@ -280,3 +283,124 @@ def review_narrative(client, old_core: str, old_relation: str = "",
         return {"new_core": new_core, "new_relation": new_relation}
     except (json.JSONDecodeError, AttributeError):
         return None
+
+
+# ── 自省闸门（纯函数，便于单测，不碰库/网络）────────────────────────────────
+# 原本在 scheduler 里，但「执行自省」既要被定时路径（每 N 次 wake）调用，
+# 又要被 self_review 工具调用——放在 brain 这一层谁 import 都不会成环
+# （scheduler / tools 都 import brain，而 brain 不 import 它们）。
+
+def _retained_ratio(old: str, new: str) -> float:
+    """旧叙事有多大比例被新版保留（单向：新增内容不加分也不扣分）。
+
+    这里刻意不用 difflib.ratio()：它的分母含新文本长度，于是「往后追加
+    一句」会让分数掉到 0.5 上下被当成漂移拒掉——而追加恰恰是自我叙事
+    最正常的生长方式。改成按句子算「旧内容有多少被保留」，只有删掉或
+    推翻才会低分。阈值见 config.SELF_REVIEW_MIN_RETENTION。
+    """
+    sents = [s for s in re.split(r"[。！？\n]", old) if len(s.strip()) >= 4]
+    if not sents:
+        return 1.0
+    total = 0.0
+    for s in sents:
+        sm = difflib.SequenceMatcher(None, s, new, autojunk=False)
+        # 匹配块求和，而不是只取最长一段：一句话中间改几个字，
+        # 不该被判成「这句没保留」。
+        total += sum(b.size for b in sm.get_matching_blocks()) / len(s)
+    return total / len(sents)
+
+
+def _review_decision(old: str, new: str) -> tuple[bool, str]:
+    """决定自省结果是否被接受。
+
+    返回 (accepted, detail)：detail 用于事件日志，调用方再按接受/拒绝加前缀。
+    两层闸：
+      1) 硬上限：new 超过 SELF_REVIEW_HARD_MAX → 拒绝（安全网，正常几乎不触发）。
+      2) 保留率：平时要求保留 ≥MIN_RETENTION 的旧句（防一把推翻自己）；
+         但旧版已超软目标时放宽到 MIN_RETENTION_OVER_TARGET，允许往 target 压。
+    """
+    if len(new) > config.SELF_REVIEW_HARD_MAX:
+        return False, (f"超长：{len(new)} > {config.SELF_REVIEW_HARD_MAX}"
+                       f"（保留上一版，下轮请压缩）")
+    eff_min = (config.SELF_REVIEW_MIN_RETENTION_OVER_TARGET
+               if len(old) > config.SELF_REVIEW_TARGET_MAX
+               else config.SELF_REVIEW_MIN_RETENTION)
+    retained = _retained_ratio(old, new)
+    if retained < eff_min:
+        return False, f"保留率 {retained:.2f} < {eff_min}（旧叙事被删太多）"
+    return True, f"保留率 {retained:.2f}，{len(old)}→{len(new)}字"
+
+
+def run_self_review(conn: sqlite3.Connection, client, trace_id: str = "") -> dict:
+    """执行一次完整的自省（core + relation 重写）并落库、记事件。
+
+    定时路径（scheduler._self_review）与 self_review 工具共用这一份执行体，
+    所以无论她是「被安排每 N 次做一次」还是「自己想做」，产物走同一个制度，
+    不会出现两套不一致的叙事。返回 {"summary": str, "new_core": str|None}。
+
+    DRY_RUN 下不调 API、不写库——空跑语义的延伸（见 scheduler.wake 的
+    DRY_RUN 短路）：自省也是「制度动作」，不该在空跑时真的改她的自我认知。
+    """
+    if config.DRY_RUN:
+        return {"summary": "（空跑）自省未实际执行", "new_core": None}
+    from . import memory, messages
+
+    old_core = memory.get_narrative(conn, "core")
+    old_relation = memory.get_narrative(conn, "relation")
+    # 冷启动时没有「上一版」。喂给模型的必须是占位符而不是 None，
+    # 否则 review_narrative 会拼出「【你现在的自我叙事】None」。
+    seed_core = old_core if old_core is not None else prompt.CORE_PLACEHOLDER
+    seed_relation = old_relation if old_relation is not None else ""
+
+    rows = messages.recent_exchanges(conn, limit=config.REVIEW_RELATION_EXCHANGES)
+    exchanges = messages.format_exchanges(rows)
+
+    result = review_narrative(client, seed_core, seed_relation, exchanges, trace_id)
+    if not result:
+        return {"summary": "自省失败：模型没返回有效结果", "new_core": None}
+    new_core = result.get("new_core")
+    new_relation = result.get("new_relation")
+
+    # ── 关系叙事：v1 无闸门，非空即落库 + 记事件 ──
+    if new_relation:
+        memory.save_narrative(conn, "relation", new_relation)
+        conn.execute(
+            """INSERT INTO events (ts, kind, trigger, why, trace_id)
+               VALUES (?, 'self_review', 'self_review', ?, ?)""",
+            (util.now_iso(), f"关系叙事已更新（{len(new_relation)}字）", trace_id or None),
+        )
+        conn.commit()
+
+    # ── 自我叙事：沿用既有保留率闸门 ──
+    if not new_core:
+        return {"summary": "自省跳过：模型未给出新的自我叙事", "new_core": None}
+    if old_core is None:
+        # 第一版没有比较对象，不设闸门。但要记一条事件，
+        # 否则「core 什么时候长出来的」在日志里是空白。
+        memory.save_narrative(conn, "core", new_core)
+        conn.execute(
+            """INSERT INTO events (ts, kind, trigger, why, trace_id)
+               VALUES (?, 'self_review', 'self_review', ?, ?)""",
+            (util.now_iso(), f"自我叙事首次建立（{len(new_core)}字）", trace_id or None),
+        )
+        conn.commit()
+        return {"summary": f"自我叙事首次建立（{len(new_core)}字）", "new_core": new_core}
+
+    accepted, detail = _review_decision(old_core, new_core)
+    if not accepted:
+        conn.execute(
+            """INSERT INTO events (ts, kind, trigger, why, trace_id)
+               VALUES (?, 'error', 'self_review', ?, ?)""",
+            (util.now_iso(), f"自省被拒：{detail}", trace_id or None),
+        )
+        conn.commit()
+        return {"summary": f"自省被拒：{detail}", "new_core": None}
+
+    memory.save_narrative(conn, "core", new_core)
+    conn.execute(
+        """INSERT INTO events (ts, kind, trigger, why, trace_id)
+           VALUES (?, 'self_review', 'self_review', ?, ?)""",
+        (util.now_iso(), f"自我叙事已更新（{detail}）", trace_id or None),
+    )
+    conn.commit()
+    return {"summary": f"自我叙事已更新（{detail}）", "new_core": new_core}

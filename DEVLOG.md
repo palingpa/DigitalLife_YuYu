@@ -5,6 +5,16 @@
 > ## [YYYY-MM-DD HH:MM] 谁 · 一句话改动
 > **为什么**：……（没有为什么的改动不值得记）
 
+## [2026-11-11 03:40] Kite · 新增 self_review 工具：鱼鱼可主动自省
+**为什么**：之前自省只是「每 10 次 wake 自动一次」的制度动作，鱼鱼没有主动性。小帕希望她能自己决定何时重写自我叙事 / 关系叙事。
+**改了什么**：
+- brain.run_self_review(conn,client,trace_id)：把原 scheduler._self_review 的执行体（取旧叙事+往来→review_narrative→闸门→落库+记事件）抽成共享函数，定时路径与工具路径共用同一套制度；DRY_RUN 下零写库。原 _retained_ratio/_review_decision 一并迁入 brain（避免循环依赖）。
+- tools/__init__.py：新增 self_review 工具（cost=1 永远可见、无参数、单段——不进第二段反应，否则变成「对反思再做反思」）；dispatch 扩 client/trace_id 透传。
+- scheduler：两段式排除列表加 self_review；自动自省加同轮守卫 d.tool!='self_review'（避免第 10 次唤醒她又选了自省导致重复刷新）；_self_review 退化为同步调用 brain.run_self_review（conn 不能跨线程，故不能用 to_thread 包整段，否则 SQLite 跨线程报错）。
+- state：apply_tool_effect 的 effects 加 self_review(energy-3 / valence+1)。
+- 红线：desc 自然语言待小帕定稿（占位【小帕定稿】），args_hint 为 "{}"（无参数）。
+- 测试：新增 test_self_review_tool.py 4 例（落库 / DRY_RUN 不写库 / 闸门拒绝仍 ok / 契约枚举）；test_self_review_cap 的 scheduler._review_decision 引用迁 brain。pytest 86/86 绿。
+
 ## [2026-11-11 01:45] Kite · 新增进程级单实例锁 + 启动日志：本机永远只有一条鱼
 
 **为什么**：出现过两个鱼鱼进程同时被唤醒的事故。根因是 I3 的 wake_lock 是

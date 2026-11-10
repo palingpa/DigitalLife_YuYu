@@ -146,6 +146,9 @@ def apply_tool_effect(s: State, tool_name: str, ok: bool, repeat_streak: int) ->
         # 给小帕发一句话：把心思说出去微微舒坦；组织语言略费神。
         # 这里的 -2 只是「费神」维度，解闷仍走上面的标准边际递减。
         "send_message":  {"valence": 2.0, "energy": -2.0},
+        # 主动自省：内省是轻度费神、但想清楚会微微通透（valence 微升）。
+        # 比写日记(-8/+3) 轻，符合「只是自己想了想」。
+        "self_review":   {"energy": -3.0, "valence": 1.0},
     }
     for attr, d in effects.get(tool_name, {}).items():
         setattr(s, attr, _clamp(getattr(s, attr) + d))
