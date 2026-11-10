@@ -234,7 +234,7 @@ def _run_web_search(conn: sqlite3.Connection, s, args: dict,
 
 ALL_TOOLS = [
     Tool("read_feed", "读一条还没读过的东西", 1, _run_read_feed),
-    Tool("write_journal", "主动写一段日记，适合有话想说的时候（区别于系统自动记的事后想法）", 1, _run_write_journal),
+    Tool("write_journal", "写一段日记。适合有话想说的时候", 1, _run_write_journal),
     Tool("recall", "检索自己的记忆或日记", 1, _run_recall),
     Tool("web_search", "联网搜索", 1, _run_web_search),
 ]
