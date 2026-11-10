@@ -253,7 +253,7 @@ def _run_send_message(conn: sqlite3.Connection, s, args: dict,
         return ToolResult(ok=False, summary="想说点什么，但没说出来。")
     from .. import memory, messages as msg_mod
     # 记忆落点：她主动联系 小帕，记一条情景记忆（不 pinned，普通权重）。
-    memory.add_episodic(conn, f"[给小帕] {text}", salience=0.7,
+    memory.add_episodic(conn, f"[你自己] {text}", salience=0.7,
                         tags=config.XIAOPA_MSG_TAG)
     # 投递通道：写入 messages 表，小帕的收件脚本从 from_yuyu 取。
     msg_mod.post(conn, "from_yuyu", text)
