@@ -51,9 +51,19 @@ def _minutes(n: int):
 
 
 def _should_wake(conn: sqlite3.Connection, s: state_mod.State, now) -> tuple[bool, str]:
-    """两条唤醒路径（Design_v0.2 §6.1）：到期 / 憋不住。"""
+    """三条唤醒路径（Design_v0.2 §6.1 + 2026-11-10 通信模块）：
+    外部消息 / 到期 / 憋不住。
+
+    外部消息优先级最高：小帕发来的、鱼鱼还没看过的消息，应当尽快让她知道。
+    但受 EXTERNAL_WAKE_MIN_GAP 约束——小帕连发时不能把唤醒节奏打得太碎。
+    消息在「被读」之前一直留库，间隔一到下一 tick 自然触发，不会丢。
+    """
     latest = db.latest_event(conn)
     since_wake = util.hours_between(now, util.parse_iso(latest["ts"])) * 60 if latest else 1e9
+
+    from . import messages as msg_mod
+    if msg_mod.has_unseen_to_yuyu(conn) and since_wake >= config.EXTERNAL_WAKE_MIN_GAP:
+        return True, "xiaopa"
 
     if now >= _next_due(conn, now):
         return True, "due"
@@ -126,8 +136,10 @@ async def wake(conn: sqlite3.Connection, client, trigger: str) -> None:
         # 通常加新工具不用改这里：只要它返回 detail 就会自动进第二段。
         # 唯一的例外是 write_journal：日记本身就是反思，不需要再把刚写的
         # 原文念一遍让她「回应自己的日记」（那等于对反思再做一次反思）。
+        # send_message 同理：给小帕的一句话写完即止，不进第二段，否则会给
+        # 「我给小帕发了句话」再生成一段「回应自己的话」，既冗余又重复算情绪。
         # 空转和失败没有 detail，也就不多花那一次调用。
-        if ok and (result.detail or "").strip() and d.tool != "write_journal":
+        if ok and (result.detail or "").strip() and d.tool not in ("write_journal", "send_message"):
             reaction = await asyncio.to_thread(
                 brain.react, client, messages, d, d.tool,
                 result.summary, result.detail, tid,

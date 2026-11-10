@@ -70,6 +70,17 @@ CREATE TABLE IF NOT EXISTS inbox (
   consumed INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_inbox_unread ON inbox(consumed, ts DESC);
+
+CREATE TABLE IF NOT EXISTS messages (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts                  TEXT    NOT NULL,
+  direction           TEXT    NOT NULL CHECK (direction IN ('to_yuyu','from_yuyu')),
+  text                TEXT    NOT NULL,
+  wake_trace_id       TEXT,
+  seen_by_yuyu        INTEGER DEFAULT 0,
+  delivered_to_xiaopa INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_msg_dir_seen ON messages(direction, seen_by_yuyu);
 """
 
 

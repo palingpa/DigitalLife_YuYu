@@ -35,6 +35,8 @@ class Tool:
         "write_journal": '{"text": "想留下的那段话"}',
         "recall": '{"query": "想找的关键词"}',
         "web_search": '{"query": "想搜的词或问题"}',
+        # 红线：下面这条参数说明会被拼进给鱼鱼的提示词，措辞待小帕定稿。
+        "send_message": '{"text": "想对小帕说的话"}',
         }
         return hints.get(self.name, "{}")
 
@@ -232,11 +234,39 @@ def _run_web_search(conn: sqlite3.Connection, s, args: dict,
     return ToolResult(ok=True, summary=summary, detail=detail)
 
 
+def _run_send_message(conn: sqlite3.Connection, s, args: dict,
+                      ctx: dict | None = None) -> ToolResult:
+    """给小帕发一句话（鱼鱼 → 小帕）。
+
+    单段工具：和 write_journal 一样，写完即止，不进第二段反应调用——
+    否则会给「我给小帕发了句话」再生成一段「回应自己的话」，既冗余又
+    会把同一件事算两次情绪。所以这里自己落一条记忆、自己写一条消息，
+    不再走 react。记忆让她记得「自己主动联系过 小帕」；messages 行让
+    小帕的收件脚本能取到。两者是「她的回忆」与「投递通道」的区别，
+    不是重复记忆（撞墙的「一次写两条记忆」指的是同一事件两次 add_episodic，
+    这里一次写记忆、一次写消息表，性质不同）。
+    """
+    text = (args.get("text") or "").strip()
+    if not text:
+        return ToolResult(ok=False, summary="想说点什么，但没说出来。")
+    from .. import memory, messages as msg_mod
+    # 记忆落点：她主动联系 小帕，记一条情景记忆（不 pinned，普通权重）。
+    memory.add_episodic(conn, f"[给小帕] {text}", salience=0.7,
+                        tags=config.XIAOPA_MSG_TAG)
+    # 投递通道：写入 messages 表，小帕的收件脚本从 from_yuyu 取。
+    msg_mod.post(conn, "from_yuyu", text)
+    return ToolResult(ok=True, summary="给小帕留了句话。", detail=text)
+
+
 ALL_TOOLS = [
     Tool("read_feed", "读一条还没读过的东西", 1, _run_read_feed),
     Tool("write_journal", "写一段日记。适合有话想说的时候", 1, _run_write_journal),
     Tool("recall", "检索自己的记忆或日记", 1, _run_recall),
     Tool("web_search", "联网搜索", 1, _run_web_search),
+    # 红线：desc 是注入鱼鱼的提示词，措辞由小帕本人定稿。
+    # 当前为功能占位，她会改成自己满意的写法（措辞越中性越好，
+    # 避免强化「小帕」的存在感、抬高她主动发消息的概率）。
+    Tool("send_message", "给小帕发一句话", 1, _run_send_message),
 ]
 
 _TOOL_MAP = {t.name: t for t in ALL_TOOLS}

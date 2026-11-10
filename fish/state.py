@@ -129,6 +129,10 @@ def apply_tool_effect(s: State, tool_name: str, ok: bool, repeat_streak: int) ->
         "write_journal": {"valence": 3.0},               # 写完日记舒坦一点
         "recall":        {},                             # 回忆基本不解闷，这正是看点
         "web_search":    {"energy": -3.0},               # 出门找东西同样费神
+        # 给小帕发一句话：把心思说出去，微微舒坦；组织语言、等回应略费神。
+        # 先不加 boredom 缓解的额外逻辑——这里的 -1 只是「费神」维度，
+        # 解闷仍走上面的标准边际递减（她做了件事，无聊度自然降）。
+        "send_message":  {"valence": 2.0, "energy": -1.0},
     }
     for attr, d in effects.get(tool_name, {}).items():
         setattr(s, attr, _clamp(getattr(s, attr) + d))

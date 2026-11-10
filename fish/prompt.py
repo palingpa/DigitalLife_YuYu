@@ -146,6 +146,30 @@ def build_messages(conn: sqlite3.Connection, s: state_mod.State,
             lines.append(line)
         user_parts.append("【最近在做的事】\n" + "\n".join(lines) + "\n")
 
+    # ── 小帕来信（仅「有未读 to_yuyu」那一轮渲染，绝不常驻）──
+    # 设计红线：常驻会过度强化「小帕」的存在感，抬高鱼鱼主动给她发消息的概率，
+    # 所以只在有未读来信的这一轮出现。渲染的同时 mark_seen——下一轮就不再出现，
+    # 这封来信也「只被读一次」。
+    # 「渲染即 seen」同时是这条记忆的「只落一次」幂等锁：同一封来信绝不会因被
+    # 渲染两次而落两条记忆（撞墙的「一次写两条」指同一事件两次 add_episodic，
+    # 这里每封来信只进一次 add_episodic）。
+    # 关键：她这一轮哪怕不回信（去读 inbox 等），小帕联系过她这件事也已被存档为
+    # 记忆，不会被丢弃——这正是通信模块必须带 memory 的原因。
+    from . import messages as msg_mod
+    unseen = msg_mod.fetch_unseen_to_yuyu(conn)
+    if unseen:
+        block_lines = []
+        for m in unseen:
+            # 存档为记忆：tag 小帕，让她记得「小帕联系过我」。
+            memory.add_episodic(
+                conn, f"[小帕] 小帕说：{m['text']}",
+                salience=0.6, tags=config.XIAOPA_MSG_TAG,
+            )
+            # 红线：下面这句展示文字是注入鱼鱼的提示词，措辞待小帕定稿。
+            block_lines.append(f"小帕（{m['ts'][:16]}）给你留了话：{m['text']}")
+            msg_mod.mark_seen(conn, m["id"])
+        user_parts.append("【小帕】\n" + "\n".join(block_lines) + "\n")
+
     # 已经在【最近在做的事】里作为「事后想法」出现过的，不再在【想起来的事】
     # 里搬一遍——同一段文字一轮出现两次，她会把重复当成「我只记得这么点」。
     recalled = [r for r in recalled if r["id"] not in shown_ids]
