@@ -64,9 +64,13 @@ REACTION_CONTRACT = """你刚做了一件事，现在看到了结果。
 
 def _relative_time(ts: str, now) -> str:
     """「3 天前」「2 小时前」——比原始时间戳更像记忆的质感。"""
-    hours = (now - memory.util.parse_iso(ts)).total_seconds() / 3600.0
+    seconds = (now - memory.util.parse_iso(ts)).total_seconds()
+    hours = seconds / 3600.0
     if hours < 1:
-        return "刚刚"
+        minutes = int(seconds // 60)
+        if minutes < 1:
+            return "刚刚"
+        return f"{minutes} 分钟前"
     if hours < 24:
         return f"{int(hours)} 小时前"
     return f"{int(hours // 24)} 天前"
