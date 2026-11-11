@@ -137,7 +137,7 @@ async def wake(conn: sqlite3.Connection, client, trigger: str) -> None:
 
     if d.tool == "idle":
         # 主动休息（idle 工具）：等价空转的 heartbeat 路径，但这是鱼鱼「点名」
-        # 选的，不是没选工具的兜底。不 dispatch、不第二段反应（cost 0）。
+        # 选的，不是没选工具的兜底。不 dispatch、不第二段反应（纯叙事标记）。
         # 她的休息理由走 fact/why，让她下次醒来能看到「我主动休息过」——
         # 这正是把「none=休息」从隐式兜底变成可命名、可主动选择的关键一步。
         # 状态层已移除，休息不再有「回能」含义，纯粹是叙事上的主动性标记。
