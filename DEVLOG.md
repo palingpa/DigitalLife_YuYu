@@ -24,6 +24,16 @@
 - 文档同步 TESTING.md（「测试轨迹隔离」扩为「测试日志隔离」，含 last_prompt.txt）。
 - pytest 86/86 绿。验证：真实 logs/last_prompt.txt 未被测试改写（18:02 残留已删），测试提示词落在 logs/traces_test/last_prompt.txt。
 
+## [2026-11-11 18:18] Kite · 【世界】预览标出「抓不回原文」的源（按源名单+兜底，标出不删）
+**为什么**：鱼鱼自己提的需求——inbox 预览只给标题，她分不清哪条点了也读不到东西。真实数据里知乎热榜全是短 teaser+链接、少数派也是，但知乎链接指向问题页补抓基本失败、少数派能抓到。渲染时无法预判补抓成败，所以判据只能靠「源」：config 新增 FEED_NOFULLTEXT_SOURCES（默认含知乎热榜），名单内源一律标无正文，再加「空 body 且无链接」兜底。小帕在 AskUserQuestion 拍板：判据=按源名单+兜底、渲染=标出保留可点（非过滤）。
+**改了什么**：
+- config：新增 FEED_NOFULLTEXT_SOURCES（默认 {"知乎热榜"}）+ INBOX_NOFULLTEXT_MARK（**【小帕定稿】占位符**，待她替换成最终措辞，例如示例里的「（*无正文*）」）。
+- feed.is_nofulltext(row)：按源名单 + 空body无链接兜底，返回是否标无正文（纯函数，好测）。
+- prompt.build_messages 的【世界】peek：标题前插 INBOX_NOFULLTEXT_MARK，保留在列表、占 [n] 编号、仍可被 read_feed 点开（不动 unread_reading_order，[n]↔read_feed 对齐不受影响）。
+- 测试：test_inbox_diversity 加 3 条（按源标/白名单排除/兜底+渲染），并把原有 2 处涉及知乎的精确断言同步为带记号（用 config 常量而非硬编码，小帕改措辞时测试不会红）。
+- pytest 90/90 绿（原 86 + 4 新）。真库渲染验证：63 条未读（知乎 51、少数派 12），知乎条目带记号、少数派不带。
+- 红线：INBOX_NOFULLTEXT_MARK 的最终自然语言措辞由小帕定稿，我只留占位符并提示替换。
+
 ## [2026-11-11 03:40] Kite · 新增 self_review 工具：鱼鱼可主动自省
 **为什么**：之前自省只是「每 10 次 wake 自动一次」的制度动作，鱼鱼没有主动性。小帕希望她能自己决定何时重写自我叙事 / 关系叙事。
 **改了什么**：

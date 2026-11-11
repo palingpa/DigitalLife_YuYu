@@ -49,6 +49,24 @@ def source_name(url: str) -> str:
     return host.removeprefix("www.")
 
 
+def is_nofulltext(row) -> bool:
+    """这条在【世界】预览时该不该标「无正文」（见 prompt.build_messages）。
+
+    判据（2026-11-11 小帕拍板）：
+    1. 源在 config.FEED_NOFULLTEXT_SOURCES（默认知乎热榜）——这类源只给
+       标题/问题，链接指向问题页、补抓基本失败，没法当长文读；
+    2. 兜底：body 剥完纯文本啥也没有（空）且没链接可补抓。
+    渲染时无法预判「补抓到底成不成功」，所以只能靠这两个可观测属性；
+    想要更准得真去抓一次（那要花钱、且改动 feed_loop 语义），暂不做。
+    """
+    name = source_name(row["source"])
+    if name in config.FEED_NOFULLTEXT_SOURCES:
+        return True
+    body = (row["body"] or "").strip()
+    link = row["link"]
+    return (not body) and (not link)
+
+
 def unread_reading_order(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     """她「看 inbox」的顺序：各源轮转，谁最新谁先。
 

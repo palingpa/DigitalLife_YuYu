@@ -201,10 +201,16 @@ def build_messages(conn: sqlite3.Connection, s: state_mod.State,
         for r in unread_rows:
             counts[r["source"]] = counts.get(r["source"], 0) + 1
         stock = "、".join(f"{feed.source_name(s)} {n}" for s, n in counts.items())
-        peek = [
-            f"[{i}]《{r['title'] or '（没标题）'}》（{feed.source_name(r['source'])}）"
-            for i, r in enumerate(unread_rows[:config.INBOX_PEEK])
-        ]
+        peek = []
+        for i, r in enumerate(unread_rows[:config.INBOX_PEEK]):
+            # 抓不回原文（按源名单 + 空 body 无链接兜底，见 feed.is_nofulltext）
+            # → 在标题前加一个记号，让她一眼知道这条点了也基本读不到东西。
+            # 只标不删：保留在【世界】里、仍占 [n] 编号、她仍可点开，
+            # 和 read_feed 的 index 对齐不受影响。
+            mark = config.INBOX_NOFULLTEXT_MARK if feed.is_nofulltext(r) else ""
+            title = r["title"] or "（没标题）"
+            src = feed.source_name(r["source"])
+            peek.append(f"[{i}]{mark}《{title}》（{src}）")
         user_parts.append(
             f"【世界】inbox 里有 {len(unread_rows)} 条没看过的（{stock}）。排在前面的几条：\n"
             + "\n".join(peek)

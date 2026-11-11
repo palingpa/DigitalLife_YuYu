@@ -10,7 +10,7 @@
 
 import pytest
 
-from fish import db, feed, prompt, state, tools, util
+from fish import config, db, feed, prompt, state, tools, util
 
 
 @pytest.fixture()
@@ -74,7 +74,9 @@ def test_read_feed_index_matches_world_numbering(conn):
     # 读完一条，两边都重新编号：新一轮【世界】的 [0] 和 read_feed 的
     # [0] 必须还是同一条——同序是「编号」成立的前提，不是巧合
     msgs, _ = prompt.build_messages(conn, state.load(conn), util.now())
-    assert "[0]《知乎新》（知乎热榜）" in msgs[-1]["content"]
+    # 知乎在「抓不回原文」名单里 → [0] 这条知乎会带无正文记号（用 config 常量，
+    # 不硬编码最终措辞，小帕改 INBOX_NOFULLTEXT_MARK 时测试不会跟着红）。
+    assert f"[0]{config.INBOX_NOFULLTEXT_MARK}《知乎新》（知乎热榜）" in msgs[-1]["content"]
     res1 = tools.dispatch("read_feed", {"index": 0}, conn, state.load(conn))
     assert "知乎新" in res1.summary
 
@@ -91,8 +93,9 @@ def test_world_shows_per_source_stock_and_labels(conn):
 
     assert "5 条没看过的" in world            # 总数
     assert "知乎热榜 3" in world and "少数派 2" in world   # 各源库存（显示名来自 config）
-    assert "[0]《少数派第1条》（少数派）" in world         # 编号 + 源名
-    assert "[1]《知乎第2条》（知乎热榜）" in world         # 相邻编号不同源
+    assert "[0]《少数派第1条》（少数派）" in world         # 编号 + 源名（少数派不标无正文）
+    # 知乎在名单里 → [1] 带无正文记号（用 config 常量，不硬编码最终措辞）
+    assert f"[1]{config.INBOX_NOFULLTEXT_MARK}《知乎第2条》（知乎热榜）" in world   # 相邻编号不同源
 
 
 def test_source_name_falls_back_to_domain(conn):
@@ -100,3 +103,42 @@ def test_source_name_falls_back_to_domain(conn):
     assert feed.source_name("https://www.example.com/feed") == "example.com"
     # config 里有名字的源用名字
     assert feed.source_name(SSPAI) == "少数派"
+
+
+def test_is_nofulltext_flags_named_source(conn):
+    """源在 FEED_NOFULLTEXT_SOURCES（知乎热榜）→ 哪怕有正文也标无正文。"""
+    _put(conn, ZHIHU, "某知乎问题", body="一段还行的开头")
+    row = conn.execute("SELECT * FROM inbox WHERE title='某知乎问题'").fetchone()
+    assert feed.is_nofulltext(row)
+
+
+def test_is_nofulltext_whitelist_excludes_others(conn):
+    """少数派不在名单里 → 不标（除非它空 body 且无链接，走兜底）。"""
+    _put(conn, SSPAI, "一篇少数派文章", body="正文。")
+    row = conn.execute("SELECT * FROM inbox WHERE title='一篇少数派文章'").fetchone()
+    assert not feed.is_nofulltext(row)
+
+
+def test_is_nofulltext_fallback_empty_no_link(conn):
+    """兜底：正文为空且没有链接 → 标无正文；有正文 → 不标。"""
+    conn.execute(
+        "INSERT INTO inbox (ts, source, title, body, link) VALUES (?,?,?,?,?)",
+        (util.now_iso(), SSPAI, "空内容无链接", "", None),
+    )
+    row = conn.execute("SELECT * FROM inbox WHERE title='空内容无链接'").fetchone()
+    assert feed.is_nofulltext(row)
+    conn.execute("UPDATE inbox SET body='有字了' WHERE title='空内容无链接'")
+    row2 = conn.execute("SELECT * FROM inbox WHERE title='空内容无链接'").fetchone()
+    assert not feed.is_nofulltext(row2)
+
+
+def test_world_preview_marks_nofulltext_source(conn):
+    """【世界】预览里，知乎条目带无正文记号，少数派不带。"""
+    _put(conn, ZHIHU, "知乎问题A", body="短开头")
+    _put(conn, SSPAI, "少数派文章B", body="正文。")
+    msgs, _ = prompt.build_messages(conn, state.load(conn), util.now())
+    world = msgs[-1]["content"].split("【世界】inbox")[1]
+    zhihu_line = next(l for l in world.splitlines() if "知乎问题A" in l)
+    sspai_line = next(l for l in world.splitlines() if "少数派文章B" in l)
+    assert config.INBOX_NOFULLTEXT_MARK in zhihu_line
+    assert config.INBOX_NOFULLTEXT_MARK not in sspai_line
