@@ -45,6 +45,18 @@ def _base_dir() -> Path:
     return config.TRACE_TEST_DIR if _test_mode else config.TRACE_DIR
 
 
+def last_prompt_path() -> Path:
+    """last_prompt.txt 的落点。
+
+    测试模式进 traces_test/，否则仍在 logs/ 根目录——保持和 README /
+    ARCHITECTURE 里写的 logs/last_prompt.txt 一致，**真机路径不变**，只把测试
+    写的提示词隔离出去，避免「测试跑完后 logs/last_prompt.txt 残留测试提示词」。
+    """
+    base = config.TRACE_TEST_DIR if _test_mode else config.LOGS_DIR
+    base.mkdir(parents=True, exist_ok=True)
+    return base / "last_prompt.txt"
+
+
 def _path_for_today() -> Path:
     from . import util
     # 测试模式下写到 traces_test/，与真实日志分开

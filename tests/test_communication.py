@@ -15,7 +15,7 @@
 import asyncio
 from datetime import timedelta
 
-from fish import config, db, scheduler, state, prompt, tools, util
+from fish import config, db, scheduler, state, prompt, tools, util, trace
 from fish.brain import Decision, Reaction
 
 
@@ -242,6 +242,7 @@ def test_dry_run_wake_has_no_side_effects(tmp_path, monkeypatch):
     assert msg_mod.fetch_unseen_to_yuyu(c)[0]["id"] == mid
 
     # 观察产物：提示词里确实渲染了【小帕】区块（空跑时也能看到会怎么呈现）
-    log_path = config.LOGS_DIR / "last_prompt.txt"
+    # 走 trace.last_prompt_path()：测试模式下实际落在 traces_test/，与真机隔离
+    log_path = trace.last_prompt_path()
     assert log_path.exists()
     assert "这是一条测试消息" in log_path.read_text(encoding="utf-8")

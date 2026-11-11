@@ -25,7 +25,7 @@ python -m pytest tests/ -v          # 详细模式，每个测试的名字都列
 
 **绿 vs 红**：全过显示 `86 passed`；有挂的会列出 FAILED 和失败原因，**先读它打印的 assert 信息**，多半一眼能看懂。
 
-> **测试轨迹隔离**：测试走到 `brain`/`scheduler` 里触发的调用轨迹，原本会直接写进 `logs/traces/YYYY-MM-DD.jsonl`，和真机轨迹用的是同一种 12 位 hex `trace_id`，根本分不清。现在由 `tests/conftest.py` 的 autouse fixture 在 pytest 启动时自动改写到 `logs/traces_test/`。看真机轨迹用 `python -m fish.trace` 不再被测试污染；要看测试轨迹去 `logs/traces_test/`。
+> **测试日志隔离**：测试走到 `brain`/`scheduler` 里触发的调用轨迹，原本会直接写进 `logs/traces/YYYY-MM-DD.jsonl`，和真机轨迹用的是同一种 12 位 hex `trace_id`，根本分不清；空跑模式还会把提示词写到 `logs/last_prompt.txt`，测试跑完会残留测试提示词误导观测。现在由 `tests/conftest.py` 的 autouse fixture 在 pytest 启动时把这两类产物都改写到 `logs/traces_test/`（轨迹 jsonl + last_prompt.txt）。看真机轨迹用 `python -m fish.trace`、真机 last_prompt 仍在 `logs/last_prompt.txt`，都不会被测试污染；要看测试产物去 `logs/traces_test/`。
 
 ## 各测试文件分别测什么
 

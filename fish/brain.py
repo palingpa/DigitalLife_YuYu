@@ -247,8 +247,9 @@ def _dry_run_decision(messages: list[dict]) -> Decision:
 
     目的只有一个：验证组装出的上下文和整条执行链路是否通畅。
     """
-    log = config.LOGS_DIR / "last_prompt.txt"
-    config.LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    # 落点走 trace.last_prompt_path()：测试模式进 traces_test/，否则仍是
+    # logs/last_prompt.txt（与 README/ARCHITECTURE 一致，真机路径不变）。
+    log = trace.last_prompt_path()
     log.write_text(
         "\n\n---\n\n".join(f"[{m['role']}]\n{m['content']}" for m in messages),
         encoding="utf-8",

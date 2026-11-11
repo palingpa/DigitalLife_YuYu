@@ -121,15 +121,16 @@ async def wake(conn: sqlite3.Connection, client, trigger: str) -> None:
     # ── DRY_RUN 短路：只观察、不执行 ────────────────────────────────────
     # 空跑语义是「不调 API、只打印上下文、记假决策」，绝不能真的 dispatch 工具、
     # 真的给小帕发消息 / 写日记、或提交状态库。上面 brain.decide 在 DRY_RUN 下
-    # 走 _dry_run_decision：已把完整提示词写入 logs/last_prompt.txt、返回假决策
-    # （不花 token）；build_messages 也已按 dry_run 跳过写库。到这里必须直接返回，
+    # 走 _dry_run_decision：已把完整提示词写入 last_prompt.txt（测试模式在
+    # traces_test/，否则在 logs/）、返回假决策（不花 token）；build_messages 也
+    # 已按 dry_run 跳过写库。到这里必须直接返回，
     # 否则会出现「假消息真发出去」——2026-11-11 因此产生了跨进程的孤儿轨迹。
     if config.DRY_RUN:
         trace.record("decision", tid, action=d.action, tool=d.tool, why=d.why,
                      felt_delta=d.felt_delta, next_wake_in_min=d.next_wake_in_min,
                      dry_run=True)
         print(f"[DRY_RUN] 已生成假决策：action={d.action} tool={d.tool} "
-              f"why={d.why}（完整提示词见 logs/last_prompt.txt）trace_id={tid}")
+              f"why={d.why}（完整提示词见 {trace.last_prompt_path()}）trace_id={tid}")
         return
 
     result = None

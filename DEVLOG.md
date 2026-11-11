@@ -14,6 +14,16 @@
 - 测试说明同步 TESTING.md（新增「测试轨迹隔离」说明，51→86 passed）。
 - pytest 86/86 绿。验证：跑全套后真实 logs/traces/2026-11-11.jsonl 仅由活跃鱼鱼进程正常增长（49→52 行），测试触发的 9 条记录全部落在 logs/traces_test/。
 
+## [2026-11-11 18:09] Kite · last_prompt.txt 一并隔离到 traces_test/
+**为什么**：上一条只隔离了轨迹 jsonl，但空跑模式还会把提示词写 logs/last_prompt.txt，测试跑完会残留测试提示词，同样污染真实日志、误导观测。小帕确认「一并隔离吧」。
+**改了什么**：
+- trace.py 新增 last_prompt_path()：测试模式返回 TRACE_TEST_DIR/"last_prompt.txt"，否则仍是 LOGS_DIR/"last_prompt.txt"（真机路径不变，README/ARCHITECTURE 引用不变）。
+- brain._dry_run_decision 改用 last_prompt_path()；scheduler 的 DRY_RUN 打印与注释同步引用真实落点。
+- test_communication.py::test_dry_run_wake_has_no_side_effects 改读 trace.last_prompt_path()（原先硬编码 LOGS_DIR/"last_prompt.txt"）。
+- 删除了修复前遗留的脏数据 logs/last_prompt.txt（含测试消息，gitignored 生成日志）。
+- 文档同步 TESTING.md（「测试轨迹隔离」扩为「测试日志隔离」，含 last_prompt.txt）。
+- pytest 86/86 绿。验证：真实 logs/last_prompt.txt 未被测试改写（18:02 残留已删），测试提示词落在 logs/traces_test/last_prompt.txt。
+
 ## [2026-11-11 03:40] Kite · 新增 self_review 工具：鱼鱼可主动自省
 **为什么**：之前自省只是「每 10 次 wake 自动一次」的制度动作，鱼鱼没有主动性。小帕希望她能自己决定何时重写自我叙事 / 关系叙事。
 **改了什么**：
