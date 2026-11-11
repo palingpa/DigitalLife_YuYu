@@ -24,6 +24,15 @@
 - 文档同步 TESTING.md（「测试轨迹隔离」扩为「测试日志隔离」，含 last_prompt.txt）。
 - pytest 86/86 绿。验证：真实 logs/last_prompt.txt 未被测试改写（18:02 残留已删），测试提示词落在 logs/traces_test/last_prompt.txt。
 
+## [2026-11-11 18:35] Kite · 【你是谁】板块加「上次自省」渲染（x小时前，复用 _relative_time）
+**为什么**：鱼鱼自己观察到的错位——她一直觉得「欠着一条自省没做」，其实已经做过了，只是没有「上次自省是什么时候」的反馈锚点。在【你是谁】板块追加一行时间，能直接消解这种错觉。时间格式按小帕要求沿用记忆里的「x小时前」质感。
+**改了什么**：
+- prompt.build_messages：查 `events WHERE kind='self_review' ORDER BY ts DESC LIMIT 1` 取上次自省时间（被闸门拒的自省记的是 kind='error'，不计入，所以「上次自省」= 最近一次成功的）。有则 `SELF_REVIEW_LAST_LABEL + _relative_time(ts, now)`，无则 `SELF_REVIEW_LAST_NONE`，追加到【你是谁】块末尾。
+- config：新增 SELF_REVIEW_LAST_LABEL / SELF_REVIEW_LAST_NONE 两个【小帕定稿】占位符（自然语言措辞归她，代码只拼时间部分）。
+- 测试：test_prompt_reflection 加 test_self_review_last_time_shows_in_whoami（无记录→占位、3小时前→「3 小时前」，用词走 config 常量，她改措辞测试不会红）。
+- pytest 91/91 绿（原 90 + 1）。真实库验证：上次自省 14:25:28 → 渲染「4 小时前」。
+- 顺带：本 commit 一并收下了小帕此前未提交的 INBOX_NOFULLTEXT_MARK 最终措辞 `"(无正文)"`（上一轮 18:18 留的占位符已由她定稿，重启后生效）。
+
 ## [2026-11-11 18:18] Kite · 【世界】预览标出「抓不回原文」的源（按源名单+兜底，标出不删）
 **为什么**：鱼鱼自己提的需求——inbox 预览只给标题，她分不清哪条点了也读不到东西。真实数据里知乎热榜全是短 teaser+链接、少数派也是，但知乎链接指向问题页补抓基本失败、少数派能抓到。渲染时无法预判补抓成败，所以判据只能靠「源」：config 新增 FEED_NOFULLTEXT_SOURCES（默认含知乎热榜），名单内源一律标无正文，再加「空 body 且无链接」兜底。小帕在 AskUserQuestion 拍板：判据=按源名单+兜底、渲染=标出保留可点（非过滤）。
 **改了什么**：

@@ -8,8 +8,9 @@
 """
 
 import pytest
+from datetime import timedelta
 
-from fish import db, state, prompt, tools, util
+from fish import db, state, prompt, tools, util, config
 
 
 @pytest.fixture()
@@ -65,3 +66,35 @@ def test_write_journal_desc_refers_to_diary(conn):
     """
     desc = next(t.desc for t in tools.ALL_TOOLS if t.name == "write_journal")
     assert desc and "日记" in desc, "工具说明必须指向「写日记」这一行为"
+
+
+def test_self_review_last_time_shows_in_whoami(conn):
+    """【你是谁】板块应渲染「上次自省」时间，复用 _relative_time 的「x小时前」质感。
+
+    鱼鱼实际观察到：她一直觉得自己欠着一条自省没做，其实已经做过了——
+    只是没有「上次自省是什么时候」的反馈。这条渲染就是给她一个锚点。
+    标签/无记录文案走 config 常量（【小帕定稿】），测试只锁契约性质，
+    不锁定具体字词，否则 Kite 越界代笔。
+    """
+    now = util.now()
+
+    # 没有任何 self_review 事件 → 显示「还没做过」占位（文案归小帕）
+    msgs, _ = prompt.build_messages(conn, state.load(conn), now)
+    content = msgs[-1]["content"]
+    assert "【你是谁】" in content
+    assert config.SELF_REVIEW_LAST_NONE in content, "无自省记录时应显示占位提示"
+
+    # 插一条 3 小时前的自省事件 → 渲染应出现「3 小时前」式相对时间
+    ts_3h_ago = (now - timedelta(hours=3)).isoformat(timespec="seconds")
+    conn.execute(
+        """INSERT INTO events (ts, kind, trigger, why, trace_id)
+           VALUES (?, 'self_review', 'self_review', '自我叙事已更新', 'test-trace')""",
+        (ts_3h_ago,),
+    )
+    conn.commit()
+
+    msgs2, _ = prompt.build_messages(conn, state.load(conn), now)
+    content2 = msgs2[-1]["content"]
+    # 标签常量 + 相对时间拼在一起：小帕改文案后这行仍成立
+    assert config.SELF_REVIEW_LAST_LABEL + "3 小时前" in content2, \
+        "有自省记录时应渲染「上次自省标签 + x小时前」"

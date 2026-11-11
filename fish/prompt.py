@@ -91,6 +91,16 @@ def build_messages(conn: sqlite3.Connection, s: state_mod.State,
     if last_wake:
         minutes_since = (now - memory.util.parse_iso(last_wake["ts"])).total_seconds() / 60.0
 
+    # 上次自省：成功自省记 kind='self_review'（被闸门拒的记 kind='error'，不计入），
+    # 所以「上次自省」= 最近一条 self_review 事件的时间。没有就走「还没做过」文案。
+    last_review = conn.execute(
+        "SELECT ts FROM events WHERE kind='self_review' ORDER BY ts DESC, id DESC LIMIT 1"
+    ).fetchone()
+    if last_review:
+        review_time = config.SELF_REVIEW_LAST_LABEL + _relative_time(last_review["ts"], now)
+    else:
+        review_time = config.SELF_REVIEW_LAST_NONE
+
     core = memory.get_narrative(conn, "core") or CORE_PLACEHOLDER
     relation = memory.get_narrative(conn, "relation") or "（你还不太认识谁。）"
 
@@ -110,7 +120,7 @@ def build_messages(conn: sqlite3.Connection, s: state_mod.State,
         "",
         f"【状态读数】{state_mod.felt_text(s)}",
         "",
-        f"【你是谁】\n{core}",
+        f"【你是谁】\n{core}\n{review_time}",
         f"【你认识的人】\n{relation}",
         "",
     ]
