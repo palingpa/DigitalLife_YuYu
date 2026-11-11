@@ -13,6 +13,7 @@ events 是「观察层」——一次唤醒一行，用来算指标、看趋势�
 而且这一层的量（每天几十条）根本不需要索引。
 
 文件位置：logs/traces/YYYY-MM-DD.jsonl
+（pytest 运行时由 tests/conftest.py 切到 logs/traces_test/，与真实日志隔离）
 """
 
 import json
@@ -27,9 +28,27 @@ def new_id() -> str:
     return uuid.uuid4().hex[:12]
 
 
+# 测试模式开关：pytest 启动时由 tests/conftest.py 的 autouse fixture 打开。
+# 打开后，所有 record / 读取都走 config.TRACE_TEST_DIR，与真实日志彻底隔离——
+# 因为测试记录用的也是 12 位 hex trace_id，和真机一模一样，只能靠目录区分。
+_test_mode = False
+
+
+def set_test_mode(on: bool) -> None:
+    """测试时切到单独的轨迹目录，避免污染 logs/traces/。"""
+    global _test_mode
+    _test_mode = bool(on)
+
+
+def _base_dir() -> Path:
+    """当前轨迹根目录：测试模式走 traces_test/，否则走 traces/。"""
+    return config.TRACE_TEST_DIR if _test_mode else config.TRACE_DIR
+
+
 def _path_for_today() -> Path:
     from . import util
-    d = config.TRACE_DIR / f"{util.now():%Y-%m-%d}.jsonl"
+    # 测试模式下写到 traces_test/，与真实日志分开
+    d = _base_dir() / f"{util.now():%Y-%m-%d}.jsonl"
     d.parent.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -51,7 +70,7 @@ def record(kind: str, trace_id: str, **fields) -> None:
 def iter_records(day: str | None = None):
     """按行读某天的轨迹（day 形如 '2026-11-09'，默认今天）。"""
     from . import util
-    path = config.TRACE_DIR / f"{day or f'{util.now():%Y-%m-%d}'}.jsonl"
+    path = _base_dir() / f"{day or f'{util.now():%Y-%m-%d}'}.jsonl"
     if not path.exists():
         return
     with path.open(encoding="utf-8") as f:
@@ -63,7 +82,7 @@ def iter_records(day: str | None = None):
 
 def tail(n: int = 5) -> list[dict]:
     """最近 n 条（跨天时按文件名排序拼接）。"""
-    files = sorted(config.TRACE_DIR.glob("*.jsonl"))
+    files = sorted(_base_dir().glob("*.jsonl"))
     out: list[dict] = []
     for p in files:
         with p.open(encoding="utf-8") as f:

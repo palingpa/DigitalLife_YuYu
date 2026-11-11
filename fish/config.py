@@ -17,6 +17,10 @@ LOGS_DIR = ROOT / "logs"
 # 关掉它：FISH_TRACE=0。每天约几十条、几 MB，无需担心。
 TRACE_ENABLED = os.environ.get("FISH_TRACE", "1") != "0"
 TRACE_DIR = LOGS_DIR / "traces"
+# 测试轨迹单独目录：pytest 运行时由 tests/conftest.py 切到这里，
+# 绝不进 logs/traces/，避免测试数据污染真实日志。测试触发的 record 用的是
+# 和真机一样的 12 位 hex trace_id，靠 trace_id 无法区分，只能靠目录隔离。
+TRACE_TEST_DIR = LOGS_DIR / "traces_test"
 
 # ── 大脑（DeepSeek API）─────────────────────────────────────────────────
 # 密钥不写进代码，从环境变量读。设置方法见 README。

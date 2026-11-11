@@ -5,6 +5,15 @@
 > ## [YYYY-MM-DD HH:MM] 谁 · 一句话改动
 > **为什么**：……（没有为什么的改动不值得记）
 
+## [2026-11-11 18:03] Kite · 测试轨迹隔离到 logs/traces_test/，不再污染真实日志
+**为什么**：测试走到 brain/scheduler 里的 trace.record 时，写出的行和真机轨迹用的是同一种 12 位 hex trace_id，肉眼和 grep 都无法区分，长期混在 logs/traces/YYYY-MM-DD.jsonl 里会干扰真机观测与 debug。小帕原话：「每次测试的时候都会往当日日志里塞一些脏数据，应该做一下测试日志和真实日志的区分」。
+**改了什么**：
+- config.TRACE_TEST_DIR = LOGS_DIR/"traces_test"（与 traces 平级，已随 logs/ 进 gitignore，且 tail() 的 glob 不会误捞）。
+- trace.py：新增模块级 _test_mode 开关 + set_test_mode() + _base_dir()，record / iter_records / tail 在测试模式下全部走 TRACE_TEST_DIR。
+- 新建 tests/conftest.py：autouse 的 session fixture 在 pytest 启动时 trace.set_test_mode(True)，所有测试自动生效，无需逐个文件改；与现有「每测试 monkeypatch DB_PATH 到临时库」的隔离思路一致。
+- 测试说明同步 TESTING.md（新增「测试轨迹隔离」说明，51→86 passed）。
+- pytest 86/86 绿。验证：跑全套后真实 logs/traces/2026-11-11.jsonl 仅由活跃鱼鱼进程正常增长（49→52 行），测试触发的 9 条记录全部落在 logs/traces_test/。
+
 ## [2026-11-11 03:40] Kite · 新增 self_review 工具：鱼鱼可主动自省
 **为什么**：之前自省只是「每 10 次 wake 自动一次」的制度动作，鱼鱼没有主动性。小帕希望她能自己决定何时重写自我叙事 / 关系叙事。
 **改了什么**：
