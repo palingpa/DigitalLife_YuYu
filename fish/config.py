@@ -148,7 +148,7 @@ INBOX_NOFULLTEXT_MARK = "(无正文)"
 # 把下面两行换成你定的最终文案（例如标签用「上次自省：」、没有自省记录时
 # 用「你还没正经做过一次自省」之类）。时间部分由代码用 _relative_time 拼，
 # 与【最近在做的事】的「x小时前」质感一致，无需你手写。
-SELF_REVIEW_LAST_LABEL = "\n上一次你自行修改的时间："
+SELF_REVIEW_LAST_LABEL = "\n上一次自省的时间："
 SELF_REVIEW_LAST_NONE = " "
 
 # 鱼鱼主动选「idle（休息）」时，写进【最近在做的事】的那条事实文案。
