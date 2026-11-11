@@ -136,8 +136,17 @@ async def wake(conn: sqlite3.Connection, client, trigger: str) -> None:
     result = None
     reaction = None
     memory_text = ""
+    is_idle = False
 
-    if d.action == "tool" and d.tool:
+    if d.tool == "idle":
+        # 主动休息（idle 工具）：等价空转的 heartbeat 路径，但这是鱼鱼「点名」
+        # 选的，不是没选工具的兜底。不 dispatch、不第二段反应、不花能量（cost 0）。
+        # 她的休息理由走 fact/why，让她下次醒来能看到「我主动休息过」——
+        # 这正是把「none=休息」从隐式兜底变成可命名、可主动选择的关键一步。
+        state_mod.apply_felt_delta(s, d.felt_delta)
+        ok = False
+        is_idle = True
+    elif d.action == "tool" and d.tool:
         result = tools.dispatch(d.tool, d.args, conn, s, seen_ids=shown_ids,
                                 client=client, trace_id=tid)
         ok = result.ok
@@ -183,7 +192,7 @@ async def wake(conn: sqlite3.Connection, client, trigger: str) -> None:
 
     after = (s.energy, s.valence, s.boredom)
 
-    kind = "heartbeat" if d.action == "none" else ("error" if not d.parse_ok else "event")
+    kind = "heartbeat" if (d.action == "none" or is_idle) else ("error" if not d.parse_ok else "event")
     if result and not result.ok and d.action == "tool":
         kind = "event"   # 调了工具但没成，也算一次 event（结果记 summary）
 
@@ -212,7 +221,9 @@ async def wake(conn: sqlite3.Connection, client, trigger: str) -> None:
             # 看不到自己刚空转过一次——2026-11-10 她凌晨选择发呆，天亮
             # 后的自己对此一无所知，连续性缺了一块。
             result.summary if result else (
-                "空转了一轮，什么都没做" if kind == "heartbeat" else None
+                config.IDLE_FACT if is_idle else (
+                    "空转了一轮，什么都没做" if kind == "heartbeat" else None
+                )
             ),
             d.why or "（没说理由）",
             before[0], after[0],        # energy

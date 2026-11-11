@@ -5,6 +5,16 @@
 > ## [YYYY-MM-DD HH:MM] 谁 · 一句话改动
 > **为什么**：……（没有为什么的改动不值得记）
 
+## [2026-11-11 19:03] Kite · 把「空转/休息」具名成 idle 工具，让鱼鱼能主动选择休息
+**为什么**：鱼鱼自察——它一直以为「none=没做事」，不理解「none=主动休息、能量会随两次醒来的间隔恢复」。根因是 `none` 只是「没选工具」的隐式兜底，不在工具枚举里、也没有触发说明，违反项目自己的红线原则（「希望模型自己想起来去调用的工具，必须在提示词里写明工具名与触发时机」）。电池模型「累→休息→恢复」的设计意图里，「休息」这根线在鱼鱼的认知里是断的。
+**改了什么**：
+- tools/__init__.py：ALL_TOOLS 加 `idle`（cost=0、无参数、单段）；`_run_idle` 是 no-op（scheduler 在分发前就认出 idle 走 heartbeat 路径，不会真调用它，仅为 Tool 对象完整）。args_hint 加 `"idle": "{}"`。desc 是【小帕定稿】占位符。
+- scheduler.wake：新增 `is_idle` 分支——tool=="idle" 时等价空转（heartbeat 路径、不 dispatch、不第二段反应、不花能量），但 tool 列记 "idle" 以区别于普通空转，且把鱼鱼写的休息理由写进 fact/why，让她下次醒来能看到「我主动休息过」。kind 判据加入 `or is_idle`；事件 fact 用 config.IDLE_FACT（占位符）而非硬编码的「空转了一轮」。
+- config：新增 IDLE_FACT（【小帕定稿】占位符，休息事实文案）。
+- 测试：test_communication 加 test_idle_tool_records_heartbeat_with_reason（heartbeat+tool=idle、理由保留、I1 不写记忆、不花能量、契约枚举含 idle）。pytest 92/92 绿（原 91 + 1）。
+- 回能不另加机制：现有「两次醒来的间隔 + 她自己定的 next_wake_in_min」已让「休息→恢复」真实可操作；idle 只是把这选择具名化。
+- 端到端校验（隔离临时库）：describe 含 idle，【最近在做的事】渲染出「x小时前 你（IDLE_FACT）（当时的理由：我累了，歇一会）」。
+
 ## [2026-11-11 18:03] Kite · 测试轨迹隔离到 logs/traces_test/，不再污染真实日志
 **为什么**：测试走到 brain/scheduler 里的 trace.record 时，写出的行和真机轨迹用的是同一种 12 位 hex trace_id，肉眼和 grep 都无法区分，长期混在 logs/traces/YYYY-MM-DD.jsonl 里会干扰真机观测与 debug。小帕原话：「每次测试的时候都会往当日日志里塞一些脏数据，应该做一下测试日志和真实日志的区分」。
 **改了什么**：

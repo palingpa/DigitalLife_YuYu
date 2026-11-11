@@ -189,6 +189,59 @@ def test_receiving_message_does_not_change_state(tmp_path, monkeypatch):
     assert not msg_mod.has_unseen_to_yuyu(c)
 
 
+# ── 4b. idle（主动休息）工具：具名化的空转 ───────────────────────────────
+
+def test_idle_tool_records_heartbeat_with_reason(tmp_path, monkeypatch):
+    """鱼鱼选 idle 应等价空转的 heartbeat 路径，但记录她「为什么休息」。
+
+    这是把「none=休息」从隐式兜底变成可命名、可主动选择的关键：
+    - kind=heartbeat（不写记忆，符合 I1；不触发第二段反应）
+    - tool 列记 "idle"（区别于没选工具的普通空转）
+    - result_summary 用 config.IDLE_FACT（【小帕定稿】文案），why 用鱼鱼自己的理由
+    - 不花能量、不动状态（无来信、无睡眠恢复时停在 baseline）
+    """
+    c = _conn(tmp_path, monkeypatch)
+    calls = {"react": 0}
+
+    def fake_decide(client, messages, tid):
+        return Decision(
+            action="tool", tool="idle", args={},
+            felt_delta={"energy": 0, "valence": 0},
+            why="我累了，歇一会", next_wake_in_min=30,
+        )
+
+    def fake_react(client, messages, d, tool, summary, detail, tid):
+        calls["react"] += 1
+        return Reaction(felt_delta={"valence": 0}, memory="x", parse_ok=True)
+
+    monkeypatch.setattr("fish.brain.decide", fake_decide)
+    monkeypatch.setattr("fish.brain.react", fake_react)
+
+    asyncio.run(scheduler.wake(c, None, trigger="test"))
+
+    # 1) 单段：没有第二段「回应自己」的调用
+    assert calls["react"] == 0
+
+    # 2) 落一条 heartbeat 事件，tool=idle，事实用 IDLE_FACT，理由是鱼鱼自己写的
+    row = c.execute(
+        "SELECT kind, tool, result_summary, why FROM events"
+    ).fetchone()
+    assert row["kind"] == "heartbeat", "idle 应走空转的 heartbeat 路径"
+    assert row["tool"] == "idle", "idle 应与普通空转区分（tool 列记 idle）"
+    assert row["result_summary"] == config.IDLE_FACT, "休息事实文案待小帕定稿（config.IDLE_FACT）"
+    assert row["why"] == "我累了，歇一会", "应保留鱼鱼自己写的休息理由"
+
+    # 3) I1：主动休息不写情景记忆
+    assert c.execute("SELECT COUNT(*) AS n FROM memories").fetchone()["n"] == 0
+
+    # 4) 不花能量、不动状态（无来信、无前次事件→无睡眠恢复；felt_delta 为 0）
+    st = c.execute("SELECT energy, valence, boredom FROM state").fetchone()
+    assert st["energy"] == 55.0 and st["valence"] == 50.0 and st["boredom"] == 30.0
+
+    # 5) idle 必须真的在契约工具枚举里（否则鱼鱼看不到、想不起来调）
+    assert "idle" in tools.describe(tools.ALL_TOOLS, state.load(c))
+
+
 # ── 5. DRY_RUN 短路：只观察、不执行 ─────────────────────────────────────
 
 def test_dry_run_wake_has_no_side_effects(tmp_path, monkeypatch):

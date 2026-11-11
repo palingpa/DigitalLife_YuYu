@@ -39,6 +39,8 @@ class Tool:
         "send_message": '{"text": "想对小帕说的话"}',
         # self_review 无参数：自我审视不需要输入，只产出新的自我叙事。
         "self_review": "{}",
+        # idle 无参数：主动休息，等价于空转（heartbeat 路径），由 scheduler 单独处理。
+        "idle": "{}",
         }
         return hints.get(self.name, "{}")
 
@@ -282,6 +284,17 @@ def _run_self_review(conn: sqlite3.Connection, s, args: dict,
     return ToolResult(ok=True, summary=res["summary"], detail=res.get("new_core") or "")
 
 
+def _run_idle(conn: sqlite3.Connection, s, args: dict,
+              ctx: dict | None = None) -> ToolResult:
+    """主动休息：什么都不做，给自己留一段空白。
+
+    注意：这个工具实际「什么也不做」——scheduler.wake 在分发前就认出
+    tool=="idle" 并走 heartbeat（空转）路径，不会真的调用本函数。留一个
+    合法 no-op 只是为了让 Tool 对象完整（ALL_TOOLS 需要可调用 run）。
+    """
+    return ToolResult(ok=True, summary="", detail="")
+
+
 ALL_TOOLS = [
     Tool("read_feed", "读一条还没读过的东西", 1, _run_read_feed),
     Tool("write_journal", "写一段日记", 1, _run_write_journal),
@@ -289,6 +302,9 @@ ALL_TOOLS = [
     Tool("web_search", "联网搜索", 1, _run_web_search),
     Tool("send_message", "给小帕发一条消息", 1, _run_send_message),
     Tool("self_review", "改动一次【你是谁】/【你认识的人】", 1, _run_self_review),
+    # idle：主动休息。cost=0（休息不耗能、也不该被「累了就隐藏」），无参数。
+    # desc 是注入鱼鱼的提示词，【小帕定稿】——下面占位符待她换成最终措辞。
+    Tool("idle", "（★小帕定稿·idle 工具描述·待替换★）", 0, _run_idle),
 ]
 
 _TOOL_MAP = {t.name: t for t in ALL_TOOLS}
