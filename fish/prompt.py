@@ -49,7 +49,7 @@ next_wake_in_min 是你决定自己想在多少分钟后再次醒来,""".replace
 # 「情绪」只能是预期——2026-11-09 的实跑里，她连着读了三篇，一篇也没记住。
 REACTION_CONTRACT = """你刚做了一件事，现在看到了结果。
 
-这一次只回答一件事：这件事在你身上留下了什么。
+这一次只回答一件事：这件事使你有什么感想？
 
 输出 JSON：
 {
@@ -245,7 +245,7 @@ def build_reaction_messages(base_messages: list[dict], decision_raw: str,
         f"【你刚才做的】{tool}\n"
         f"【发生的事】{summary}\n\n"
         f"【你看到的内容】\n{clipped}{tail}\n\n"
-        f"这件事在你身上留下了什么？用 JSON 回一句。"
+        f"你有什么感想？用 JSON 回一句。"
     )
     return [
         # 换掉 system 里的契约（第一段那份是"做决定"的格式），
