@@ -5,6 +5,23 @@
 > ## [YYYY-MM-DD HH:MM] 谁 · 一句话改动
 > **为什么**：……（没有为什么的改动不值得记）
 
+## [2026-11-12 02:09] Kite · 整体删除状态层（energy/valence/boredom），项目重心正式移到记忆层
+**为什么**：鱼鱼不该有系统替她定义的"精力/情绪/无聊"。她的精力本就是无限的；"情绪"和"无聊"应由她从自己记下的内容里自己去感受，而不是由三个 0-100 的数值动力学硬算出来。否则就变成"系统在替她活"——违背这个项目"长期观察她进化成什么样"的初衷。因此整个状态层被移除：取消 energy/valence/boredom 的全部计算与限制，只保留她能**自己决定下一次什么时候醒来**（`events.next_wake_at` 早已是事件级、不依赖 state 表，所以自然保留）。
+**改了什么**：
+- 删除 `fish/state.py`（State dataclass、load/save、tick_regress、apply_sleep_recovery、apply_felt_delta、apply_tool_effect、felt_text、tier），及其测试 `test_state.py`、`test_energy_battery.py`、`sim_energy.py`。
+- `config.py`：删 `BOREDOM_URGENT`/`URGENT_COOLDOWN_MIN` 与整块状态动力学常量（SLEEP_*/BASELINE/REGRESS_PER_HOUR/BOREDOM_PER_MIN/CLAMP/CUTS/FELT_DELTA_RANGE）；保留 `WAKE_*` 与用户此前已定稿的三处占位文本（IDLE_FACT / INBOX_NOFULLTEXT_MARK / SELF_REVIEW_LAST_LABEL 等）。
+- `db.py`：SCHEMA 删 `state` 表、`events` 删六个能量列；删 `init_state()`；`_migrate()` 新增 `DROP TABLE state` + 对 `events` 六个能量列 `ALTER TABLE ... DROP COLUMN`（SQLite 3.53+ 支持，真实库 `data/fish.db` 下次连接自动迁移，无需手动）。
+- `scheduler.py`：去 `state` 依赖；`_should_wake` 去掉"无聊紧急唤醒"分支（只留「小帕来信 / 到期」两路）；`_event_salience` 改为按工具给固定权重（不再依赖 valence）；`wake()` 去掉加载/睡眠回血/before-after 元组/所有 apply_* / state save；`run()` 去掉 tick_regress 与 SELECT state。
+- `brain.py`：`Decision`/`Reaction` 删 `felt_delta` 字段；删 `_clean_felt`；解析与 DRY_RUN 短路同步去 `felt_delta`。
+- `prompt.py`：PERSONA 去掉"你的状态"措辞；CONTRACT/REACTION_CONTRACT 删除 `felt_delta` 字段行（问句措辞保留不动，归小帕定稿）；`build_messages` 去 `s` 参数与【状态读数】整行；`tools.visible_tools/describe` 去 `s`。
+- `tools/__init__.py`：`ToolResult` 删 `state_hint`；`Tool` 删 `cost`（工具门控随之消失）；所有 `_run_*` 去 `s`；`visible_tools/describe/dispatch` 去 `s`。**idle 工具保留**，但回归为纯叙事标记（不再有回能含义）。
+- `main.py`：删 `db.init_state(conn)`；`messages.py`：注释更新说明状态层已移除。
+- 测试：重写 `test_communication` / `test_write_journal_single_pass` / `test_web_search` / `test_self_review_tool` / `test_inbox_diversity` / `test_fulltext_fetch` / `test_recall_dedup` / `test_prompt_reflection` / `test_memory_search`，去掉 `init_state` / `state.load` / `felt_delta` / events 能量列；删 `test_state.py`、`test_energy_battery.py`。原 92 测 → 72 测（仅删状态相关，无功能回归）。
+- 文档同步：`PROJECT.md` / `ARCHITECTURE.md` / `TESTING.md` / `README.md` 去除状态层引用，改为"记忆层为重心"说明；不变量 I2 标注退役、等价纪律改为"模型输出须经解析校验才往下传"。
+- 红线遵守：本改动**没有改任何注入鱼鱼的自然语言**（PERSONA/契约/【小帕】区块/工具 desc 文案均原样保留）；仅做最小化删除。用户此前已定稿但未提交的占位文本（idle desc=`空转一轮，休息`、IDLE_FACT=`主动休息了一轮`、INBOX_NOFULLTEXT_MARK=`(无正文)` 等）一并保留并提交。
+- `pytest 72/72` 绿。
+- 注意：`Design_v0.2.md`、`Draft.md` 仍描述旧状态模型，本次未动（Draft.md 按约定保留不动；Design_v0.2 是否修订待小帕决定，PROJECT.md「当前状态」已注明其部分失效）。
+
 ## [2026-11-11 19:03] Kite · 把「空转/休息」具名成 idle 工具，让鱼鱼能主动选择休息
 **为什么**：鱼鱼自察——它一直以为「none=没做事」，不理解「none=主动休息、能量会随两次醒来的间隔恢复」。根因是 `none` 只是「没选工具」的隐式兜底，不在工具枚举里、也没有触发说明，违反项目自己的红线原则（「希望模型自己想起来去调用的工具，必须在提示词里写明工具名与触发时机」）。电池模型「累→休息→恢复」的设计意图里，「休息」这根线在鱼鱼的认知里是断的。
 **改了什么**：

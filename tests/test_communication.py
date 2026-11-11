@@ -4,26 +4,28 @@
 1. fish/messages.py 薄消息层的增删查标记；
 2. 【小帕】区块只在「有未读」那轮渲染，且「渲染即 seen」= 同一封来信只落一条记忆；
 3. send_message 是单段工具：不触发第二段、只落一条「给小帕」记忆、并投递 from_yuyu 消息；
-4. _should_wake 因外部消息唤醒（受最小间隔约束），且收到消息本身不改鱼鱼状态。
+4. _should_wake 因外部消息唤醒（受最小间隔约束），且收到消息本身不触发第二段、不写额外记忆。
 
 设计红线回顾（详见 DEVLOG）：
 - send_message 的 desc / args_hint 措辞、PERSONA 第 19 行、【小帕】区块正文，
   都属于注入鱼鱼的提示词，按分工红线由小帕本人定稿；本测试只锁「契约性质」
   （必须有、必须单段、必须落记忆），不锁定具体字词，避免 Kite 越界代笔。
+
+注意：状态层（energy/valence/boredom）已于 2026-11-12 整个删除。鱼鱼不再有
+系统定义的「情绪/精力/无聊」，是否醒来完全由每次自己定的 next_wake_in_min
+决定。因此本测试不再断言任何「状态值」，只锁记忆层与唤醒契约。
 """
 
 import asyncio
 from datetime import timedelta
 
-from fish import config, db, scheduler, state, prompt, tools, util, trace
+from fish import config, db, scheduler, prompt, tools, util, trace
 from fish.brain import Decision, Reaction
 
 
 def _conn(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "comm.db")
-    c = db.connect()
-    db.init_state(c)
-    return c
+    return db.connect()
 
 
 # ── 1. 消息层 ────────────────────────────────────────────────────────────
@@ -67,7 +69,7 @@ def test_xiaopa_block_renders_once_and_persists_memory(tmp_path, monkeypatch):
     msg_mod.post(c, "to_yuyu", "这是一条测试消息")
 
     now = util.now()
-    msgs, _ = prompt.build_messages(c, state.load(c), now)
+    msgs, _ = prompt.build_messages(c, now)
     content = msgs[-1]["content"]
     assert "【小帕】" in content
     assert "这是一条测试消息" in content
@@ -82,7 +84,7 @@ def test_xiaopa_block_renders_once_and_persists_memory(tmp_path, monkeypatch):
 
     # 渲染即 seen：下一轮不再渲染、不再加记忆（同封来信不落两条）
     assert not msg_mod.has_unseen_to_yuyu(c)
-    msgs2, _ = prompt.build_messages(c, state.load(c), now)
+    msgs2, _ = prompt.build_messages(c, now)
     assert "【小帕】" not in msgs2[-1]["content"]
     n = c.execute(
         "SELECT COUNT(*) AS n FROM memories WHERE tags=?",
@@ -101,20 +103,17 @@ def test_send_message_single_pass_and_delivers(tmp_path, monkeypatch):
         return Decision(
             action="tool", tool="send_message",
             args={"text": "这是一条测试消息"},
-            felt_delta={"energy": 0, "valence": 0},
             why="想告诉小帕", next_wake_in_min=30,
         )
 
     def fake_react(client, messages, d, tool, summary, detail, tid):
         calls["react"] += 1
-        return Reaction(felt_delta={"valence": -2}, memory="回应自己的话", parse_ok=True)
+        return Reaction(memory="回应自己的话", parse_ok=True)
 
     monkeypatch.setattr("fish.brain.decide", fake_decide)
     monkeypatch.setattr("fish.brain.react", fake_react)
 
-    before_v = c.execute("SELECT valence FROM state").fetchone()[0]
     asyncio.run(scheduler.wake(c, None, trigger="test"))
-    after_v = c.execute("SELECT valence FROM state").fetchone()[0]
 
     # 1) 单段：没有第二段「回应自己」的调用
     assert calls["react"] == 0
@@ -131,9 +130,6 @@ def test_send_message_single_pass_and_delivers(tmp_path, monkeypatch):
     assert froms[0]["direction"] == "from_yuyu"
     assert froms[0]["text"] == "这是一条测试消息"
 
-    # 4) valence 只受工具效果 +2（第一段 felt_delta 为 0，无第二段自报）
-    assert after_v == before_v + 2.0
-
 
 # ── 4. _should_wake：外部消息唤醒 + 最小间隔 ─────────────────────────────
 
@@ -141,7 +137,7 @@ def test_should_wake_xiaopa_when_pending_and_gap_ok(tmp_path, monkeypatch):
     from fish import messages as msg_mod
     c = _conn(tmp_path, monkeypatch)
     msg_mod.post(c, "to_yuyu", "这是一条测试消息")
-    go, trig = scheduler._should_wake(c, state.load(c), util.now())
+    go, trig = scheduler._should_wake(c, util.now())
     assert go and trig == "xiaopa"
 
 
@@ -157,31 +153,32 @@ def test_should_wake_xiaopa_suppressed_within_min_gap(tmp_path, monkeypatch):
         (recent, (util.now() + timedelta(minutes=60)).isoformat(timespec="seconds")),
     )
     c.commit()
-    go, trig = scheduler._should_wake(c, state.load(c), util.now())
+    go, trig = scheduler._should_wake(c, util.now())
     assert not go, "未满最小间隔时，外部消息不应立刻触发唤醒"
 
 
-def test_receiving_message_does_not_change_state(tmp_path, monkeypatch):
-    """收到消息这件事本身不改状态（无 boredom 缓解、无强制情绪）。"""
+def test_receiving_message_does_not_trigger_second_pass(tmp_path, monkeypatch):
+    """收到消息这件事本身不触发第二段、也不写额外记忆。
+
+    状态层（2026-11-12 删除）之前此处还会断言「状态停在 baseline」，
+    现在没有状态了，本测试只守两条记忆层契约：
+    - 空转决策不引发第二段 react；
+    - 「小帕来信」只落一条记忆、且已被 mark_seen。
+    """
     from fish import messages as msg_mod
     c = _conn(tmp_path, monkeypatch)
     msg_mod.post(c, "to_yuyu", "这是一条测试消息")
 
     def fake_decide(client, messages, tid):
-        # 空转：不做事，felt_delta 为 0
+        # 空转：不做事
         return Decision(action="none", tool=None, args={},
-                        felt_delta={"energy": 0, "valence": 0},
                         why="这是一条测试原因", next_wake_in_min=30)
 
     monkeypatch.setattr("fish.brain.decide", fake_decide)
 
     asyncio.run(scheduler.wake(c, None, trigger="test"))
 
-    # 状态应停在 baseline（init_state：energy55/valence50/boredom30）
-    row = c.execute("SELECT energy, valence, boredom FROM state").fetchone()
-    assert row["energy"] == 55.0 and row["valence"] == 50.0 and row["boredom"] == 30.0
-
-    # 但「小帕来信」这件事确实被存档为记忆、且已标记 seen
+    # 「小帕来信」这件事确实被存档为记忆、且已标记 seen
     assert c.execute(
         "SELECT COUNT(*) AS n FROM memories WHERE tags=?",
         (config.XIAOPA_MSG_TAG,),
@@ -198,7 +195,7 @@ def test_idle_tool_records_heartbeat_with_reason(tmp_path, monkeypatch):
     - kind=heartbeat（不写记忆，符合 I1；不触发第二段反应）
     - tool 列记 "idle"（区别于没选工具的普通空转）
     - result_summary 用 config.IDLE_FACT（【小帕定稿】文案），why 用鱼鱼自己的理由
-    - 不花能量、不动状态（无来信、无睡眠恢复时停在 baseline）
+    - 单段、不写情景记忆（无来信、无睡眠恢复概念）
     """
     c = _conn(tmp_path, monkeypatch)
     calls = {"react": 0}
@@ -206,13 +203,12 @@ def test_idle_tool_records_heartbeat_with_reason(tmp_path, monkeypatch):
     def fake_decide(client, messages, tid):
         return Decision(
             action="tool", tool="idle", args={},
-            felt_delta={"energy": 0, "valence": 0},
             why="我累了，歇一会", next_wake_in_min=30,
         )
 
     def fake_react(client, messages, d, tool, summary, detail, tid):
         calls["react"] += 1
-        return Reaction(felt_delta={"valence": 0}, memory="x", parse_ok=True)
+        return Reaction(memory="x", parse_ok=True)
 
     monkeypatch.setattr("fish.brain.decide", fake_decide)
     monkeypatch.setattr("fish.brain.react", fake_react)
@@ -234,12 +230,8 @@ def test_idle_tool_records_heartbeat_with_reason(tmp_path, monkeypatch):
     # 3) I1：主动休息不写情景记忆
     assert c.execute("SELECT COUNT(*) AS n FROM memories").fetchone()["n"] == 0
 
-    # 4) 不花能量、不动状态（无来信、无前次事件→无睡眠恢复；felt_delta 为 0）
-    st = c.execute("SELECT energy, valence, boredom FROM state").fetchone()
-    assert st["energy"] == 55.0 and st["valence"] == 50.0 and st["boredom"] == 30.0
-
-    # 5) idle 必须真的在契约工具枚举里（否则鱼鱼看不到、想不起来调）
-    assert "idle" in tools.describe(tools.ALL_TOOLS, state.load(c))
+    # 4) idle 必须真的在契约工具枚举里（否则鱼鱼看不到、想不起来调）
+    assert "idle" in tools.describe(tools.ALL_TOOLS)
 
 
 # ── 5. DRY_RUN 短路：只观察、不执行 ─────────────────────────────────────
@@ -252,7 +244,7 @@ def test_dry_run_wake_has_no_side_effects(tmp_path, monkeypatch):
     却无对应 decision、且数据库里什么都没落）。
 
     本测试验证 DRY_RUN 下 wake() 既不 dispatch 工具、也不写事件、不消费来信、
-    不新增记忆、不动状态库——只把提示词写到 logs/last_prompt.txt 供观察。
+    不新增记忆——只把提示词写到 logs/last_prompt.txt 供观察。
     """
     from fish import messages as msg_mod
 
@@ -268,7 +260,6 @@ def test_dry_run_wake_has_no_side_effects(tmp_path, monkeypatch):
         "from_yuyu": c.execute(
             "SELECT COUNT(*) AS n FROM messages WHERE direction='from_yuyu'"
         ).fetchone()["n"],
-        "state": c.execute("SELECT energy, valence, boredom FROM state").fetchone(),
     }
 
     asyncio.run(scheduler.wake(c, None, trigger="test"))
@@ -279,7 +270,6 @@ def test_dry_run_wake_has_no_side_effects(tmp_path, monkeypatch):
         "from_yuyu": c.execute(
             "SELECT COUNT(*) AS n FROM messages WHERE direction='from_yuyu'"
         ).fetchone()["n"],
-        "state": c.execute("SELECT energy, valence, boredom FROM state").fetchone(),
     }
 
     # 事件计数不变：DRY_RUN 不插入 event
@@ -288,8 +278,6 @@ def test_dry_run_wake_has_no_side_effects(tmp_path, monkeypatch):
     assert after["memories"] == before["memories"]
     # send_message 未被 dispatch（没有 from_yuyu 投递）
     assert after["from_yuyu"] == before["from_yuyu"] == 0
-    # 状态库完全没动
-    assert after["state"] == before["state"]
     # 关键：来信仍未被消费——保持未读，下一轮真实唤醒还能看到
     assert msg_mod.has_unseen_to_yuyu(c) is True
     assert msg_mod.fetch_unseen_to_yuyu(c)[0]["id"] == mid

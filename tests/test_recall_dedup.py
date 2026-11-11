@@ -14,7 +14,7 @@ import pathlib
 
 import pytest
 
-from fish import db, memory, prompt, state, tools, util
+from fish import db, memory, prompt, tools, util
 
 
 @pytest.fixture()
@@ -22,12 +22,7 @@ def conn(tmp_path, monkeypatch):
     """每个用例一个干净的真实库（跑完整 DDL，不是手搓表）。"""
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
     c = db.connect()
-    db.init_state(c)
     return c
-
-
-def _states(c):
-    return state.load(c)
 
 
 def test_recall_returns_only_unseen(conn):
@@ -37,7 +32,7 @@ def test_recall_returns_only_unseen(conn):
     m2 = memory.add_episodic(conn, "还是自己选这件事，但换了个角度：这次是从父母"
                                    "那一端看，期待变成了债。", salience=0.8)
 
-    res = tools.dispatch("recall", {"query": "自己选"}, conn, _states(conn),
+    res = tools.dispatch("recall", {"query": "自己选"}, conn,
                          seen_ids={m1})
 
     assert res.ok
@@ -50,7 +45,7 @@ def test_recall_all_duplicate_says_no_more(conn):
     m1 = memory.add_episodic(conn, "关于自己选的第一个想法，写得比较长一些。", salience=0.8)
     m2 = memory.add_episodic(conn, "关于自己选的第二个想法，也不算短。", salience=0.8)
 
-    res = tools.dispatch("recall", {"query": "自己选"}, conn, _states(conn),
+    res = tools.dispatch("recall", {"query": "自己选"}, conn,
                          seen_ids={m1, m2})
 
     assert res.ok                                    # 检索成功，只是没有新东西
@@ -63,7 +58,7 @@ def test_recall_all_duplicate_says_no_more(conn):
 def test_recall_without_seen_ids_is_unchanged(conn):
     memory.add_episodic(conn, "一个关于自己选的孤零零的想法。", salience=0.8)
 
-    res = tools.dispatch("recall", {"query": "自己选"}, conn, _states(conn))
+    res = tools.dispatch("recall", {"query": "自己选"}, conn)
     assert res.ok
     assert "孤零零的想法" in res.detail
     assert "已经看过" not in res.detail
@@ -76,18 +71,16 @@ def test_prompt_never_shows_same_memory_twice(conn):
     # 造一条唤醒事件，把这条记忆挂成它的「事后想法」
     conn.execute(
         """INSERT INTO events (ts, kind, trigger, tool, result_summary, why,
-                               energy_before, energy_after, valence_before,
-                               valence_after, boredom_before, boredom_after,
                                next_wake_at)
            VALUES ('2026-11-10T09:00:00', 'event', 'due', 'read_feed',
-                   '读了《某周刊》', '想看看', 50, 50, 50, 50, 10, 10,
+                   '读了《某周刊》', '想看看',
                    '2026-11-10T10:00:00')"""
     )
     eid = conn.execute("SELECT id FROM events ORDER BY id DESC LIMIT 1").fetchone()["id"]
     conn.execute("UPDATE memories SET source_event_id=? WHERE id=?", (eid, mid))
     conn.commit()
 
-    msgs, shown = prompt.build_messages(conn, _states(conn), util.now())
+    msgs, shown = prompt.build_messages(conn, util.now())
     text = msgs[1]["content"]
 
     assert mid in shown

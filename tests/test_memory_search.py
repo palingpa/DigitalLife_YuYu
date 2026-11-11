@@ -20,7 +20,6 @@ def conn(tmp_path, monkeypatch):
     """每个用例一个真实 DDL 的干净库。"""
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
     c = db.connect()
-    db.init_state(c)
     return c
 
 
@@ -29,7 +28,7 @@ def _ids(rows):
 
 
 def test_no_query_keeps_old_behaviour(conn):
-    """不带 query（wake 时自动检索）不看相关性，照旧按新鲜度+情绪排序。"""
+    """不带 query（wake 时自动检索）不看相关性，照旧按新鲜度+显著性排序。"""
     memory.add_episodic(conn, "读了胖东来那篇，赔到破产也要守原则。", salience=0.5)
     memory.add_episodic(conn, "邻居家的猫又来蹭饭了。", salience=0.3)
 

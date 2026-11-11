@@ -9,7 +9,7 @@ import json
 import sqlite3
 from dataclasses import dataclass, field
 
-from .. import config, state as state_mod, util
+from .. import config, util
 
 
 @dataclass
@@ -17,15 +17,13 @@ class ToolResult:
     ok: bool
     summary: str                 # 给模型看的 1-3 句，永远不超过百字
     detail: str = ""             # 完整内容，只落库，绝不进 prompt
-    state_hint: dict = field(default_factory=dict)  # 备用；状态规则统一走 state.apply_tool_effect
 
 
 @dataclass
 class Tool:
     name: str
     desc: str                    # 给模型看的一句话：能干什么、值不值得干
-    cost: int                    # 耗能档位 1-3；cost≥3 且 energy<25 时不可见
-    run: object                  # (conn, state, args, ctx) -> ToolResult
+    run: object                  # (conn, args, ctx) -> ToolResult
 
     @property
     def args_hint(self) -> str:
@@ -47,7 +45,7 @@ class Tool:
 
 # ── 三个第一版工具 ───────────────────────────────────────────────────────
 
-def _run_read_feed(conn: sqlite3.Connection, s, args: dict,
+def _run_read_feed(conn: sqlite3.Connection, args: dict,
                    ctx: dict | None = None) -> ToolResult:
     from .. import feed
     index = max(0, int(args.get("index", 0)))
@@ -109,7 +107,7 @@ def _run_read_feed(conn: sqlite3.Connection, s, args: dict,
     return ToolResult(ok=True, summary=summary, detail=body)
 
 
-def _run_write_journal(conn: sqlite3.Connection, s, args: dict,
+def _run_write_journal(conn: sqlite3.Connection, args: dict,
                        ctx: dict | None = None) -> ToolResult:
     text = (args.get("text") or "").strip()
     if not text:
@@ -129,7 +127,7 @@ def _head(text: str, n: int) -> str:
     return text[:n] + ("…" if len(text) > n else "")
 
 
-def _run_recall(conn: sqlite3.Connection, s, args: dict, ctx: dict | None = None) -> ToolResult:
+def _run_recall(conn: sqlite3.Connection, args: dict, ctx: dict | None = None) -> ToolResult:
     from .. import memory
     query = (args.get("query") or "").strip()
     if not query:
@@ -179,7 +177,7 @@ def _run_recall(conn: sqlite3.Connection, s, args: dict, ctx: dict | None = None
     return ToolResult(ok=True, summary=summary, detail=detail)
 
 
-def _run_web_search(conn: sqlite3.Connection, s, args: dict,
+def _run_web_search(conn: sqlite3.Connection, args: dict,
                     ctx: dict | None = None) -> ToolResult:
     from .. import websearch
     query = (args.get("query") or "").strip()
@@ -238,7 +236,7 @@ def _run_web_search(conn: sqlite3.Connection, s, args: dict,
     return ToolResult(ok=True, summary=summary, detail=detail)
 
 
-def _run_send_message(conn: sqlite3.Connection, s, args: dict,
+def _run_send_message(conn: sqlite3.Connection, args: dict,
                       ctx: dict | None = None) -> ToolResult:
     """给小帕发一句话（鱼鱼 → 小帕）。
 
@@ -262,7 +260,7 @@ def _run_send_message(conn: sqlite3.Connection, s, args: dict,
     return ToolResult(ok=True, summary="给小帕留了句话。", detail=text)
 
 
-def _run_self_review(conn: sqlite3.Connection, s, args: dict,
+def _run_self_review(conn: sqlite3.Connection, args: dict,
                      ctx: dict | None = None) -> ToolResult:
     """主动自省（鱼鱼 → 自己）：重写自我叙事 + 关系叙事。
 
@@ -284,7 +282,7 @@ def _run_self_review(conn: sqlite3.Connection, s, args: dict,
     return ToolResult(ok=True, summary=res["summary"], detail=res.get("new_core") or "")
 
 
-def _run_idle(conn: sqlite3.Connection, s, args: dict,
+def _run_idle(conn: sqlite3.Connection, args: dict,
               ctx: dict | None = None) -> ToolResult:
     """主动休息：什么都不做，给自己留一段空白。
 
@@ -296,15 +294,15 @@ def _run_idle(conn: sqlite3.Connection, s, args: dict,
 
 
 ALL_TOOLS = [
-    Tool("read_feed", "读一条还没读过的东西", 1, _run_read_feed),
-    Tool("write_journal", "写一段日记", 1, _run_write_journal),
-    Tool("recall", "检索自己的记忆或日记", 1, _run_recall),
-    Tool("web_search", "联网搜索", 1, _run_web_search),
-    Tool("send_message", "给小帕发一条消息", 1, _run_send_message),
-    Tool("self_review", "改动一次【你是谁】/【你认识的人】", 1, _run_self_review),
-    # idle：主动休息。cost=0（休息不耗能、也不该被「累了就隐藏」），无参数。
-    # desc 是注入鱼鱼的提示词，【小帕定稿】——下面占位符待她换成最终措辞。
-    Tool("idle", "（★小帕定稿·idle 工具描述·待替换★）", 0, _run_idle),
+    Tool("read_feed", "读一条还没读过的东西", _run_read_feed),
+    Tool("write_journal", "写一段日记", _run_write_journal),
+    Tool("recall", "检索自己的记忆或日记", _run_recall),
+    Tool("web_search", "联网搜索", _run_web_search),
+    Tool("send_message", "给小帕发一条消息", _run_send_message),
+    Tool("self_review", "改动一次【你是谁】/【你认识的人】", _run_self_review),
+    # idle：主动休息（状态层已移除，休息不再有「回能」含义，纯粹是叙事上的
+    # 主动性标记）。无参数。desc 是注入鱼鱼的提示词，【小帕定稿】。
+    Tool("idle", "空转一轮，休息", _run_idle),
 ]
 
 _TOOL_MAP = {t.name: t for t in ALL_TOOLS}
@@ -312,34 +310,24 @@ _TOOL_MAP = {t.name: t for t in ALL_TOOLS}
 
 # ── 给大脑用的视图 ───────────────────────────────────────────────────────
 
-def visible_tools(s: state_mod.State) -> list[Tool]:
-    """硬约束的唯一形式：不可见 = 干脆不给（Design_v0.2 §8.3）。
+def visible_tools() -> list[Tool]:
+    """返回当前可见的工具。
 
-    刻意不做「成功率下降」那类软惩罚——随机失败对模型是白噪声，
-    它会自己编原因，把第三层观察搅浑。
+    状态层已移除，不再有「精力低就隐藏工具」的限制——所有工具永远可见。
+    这里保留这个函数的意义在于：调用方（prompt.build_messages）仍按「可见
+    工具」的口径取清单，未来若想按别的条件（如正在做什么）动态裁剪，改这里即可。
     """
-    out = []
-    for t in ALL_TOOLS:
-        if t.cost >= 3 and s.energy < 25:
-            continue
-        out.append(t)
-    return out
+    return list(ALL_TOOLS)
 
 
-def describe(tools: list[Tool], s: state_mod.State) -> str:
-    """工具清单文本，进 prompt。被隐藏的工具要说明为什么，让她知道
-    「有些事我现在干不了」，而不是以为世界只有这几件事。"""
-    lines = []
-    for t in tools:
-        lines.append(f"- {t.name}: {t.desc} 参数形如 {t.args_hint}")
-    hidden = [t for t in ALL_TOOLS if t not in tools]
-    for t in hidden:
-        lines.append(f"- （{t.name} 现在用不了：太耗精力，你现在的状态撑不住）")
+def describe(tools: list[Tool]) -> str:
+    """工具清单文本，进 prompt。"""
+    lines = [f"- {t.name}: {t.desc} 参数形如 {t.args_hint}" for t in tools]
     return "\n".join(lines)
 
 
 def dispatch(name: str, args: dict, conn: sqlite3.Connection,
-             s: state_mod.State, seen_ids: set[int] | None = None,
+             seen_ids: set[int] | None = None,
              client=None, trace_id: str = "") -> ToolResult:
     """seen_ids：这一轮已经摆在她眼前的记忆 id，供 recall 去重。
     client / trace_id：透传给工具 runner（自省这类要调 LLM 的工具需要）。
@@ -349,6 +337,6 @@ def dispatch(name: str, args: dict, conn: sqlite3.Connection,
         return ToolResult(ok=False, summary=f"没有叫 {name} 的工具。")
     ctx = {"seen_ids": set(seen_ids or ()), "client": client, "trace_id": trace_id}
     try:
-        return tool.run(conn, s, args or {}, ctx)
+        return tool.run(conn, args or {}, ctx)
     except Exception as e:                       # 工具崩了 = 事情失败，不崩进程
         return ToolResult(ok=False, summary=f"{name} 出了岔子：{type(e).__name__}。")

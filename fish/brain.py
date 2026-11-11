@@ -17,7 +17,7 @@ import sqlite3
 import time
 from dataclasses import dataclass, field
 
-from . import config, prompt, state as state_mod, trace, util
+from . import config, prompt, trace, util
 
 
 @dataclass
@@ -26,7 +26,6 @@ class Decision:
     tool: str | None
     args: dict = field(default_factory=dict)
     why: str = ""
-    felt_delta: dict = field(default_factory=dict)   # 只表示「此刻的感觉」
     next_wake_in_min: int = 30   # 默认值：模型没给时的兜底
     raw: str = ""
     parse_ok: bool = True
@@ -41,7 +40,6 @@ class Reaction:
     跟 Decision 刻意分开：Decision 是「想做什么」，Reaction 是「做完了怎么样」。
     合成一个类，就会重蹈「还没看到内容就已经写完记忆」的覆辙。
     """
-    felt_delta: dict = field(default_factory=dict)
     memory: str = ""
     next_wake_in_min: int | None = None    # None = 不改，沿用第一段定的
     raw: str = ""
@@ -104,32 +102,13 @@ def _call_api(client, messages: list[dict], temperature: float,
                     (usage.prompt_tokens, usage.completion_tokens), duration)
 
 
-def _clean_felt(raw) -> dict:
-    """只留 energy/valence，每个值截到 -10..+10。
-
-    注意 boredom 永远不在允许名单里：她能给自己加无聊的话，
-    就能靠「我很无聊」触发紧急唤醒，「自主」在结构上就变成假的了。
-    """
-    clean = {}
-    for k in ("energy", "valence"):
-        try:
-            clean[k] = max(-config.FELT_DELTA_RANGE,
-                           min(config.FELT_DELTA_RANGE, float((raw or {}).get(k, 0))))
-        except (TypeError, ValueError):
-            pass
-    return clean
-
-
 def _clamp_decision(d: Decision) -> Decision:
     """模型输出 → 能安全生效的决策。
 
-    三道闸门：
-    1. felt_delta 只留 energy/valence，每个值截到 -10..+10
-    2. 没选工具时，把 action/tool 归一化成空转
-    3. next_wake_in_min 钳进 [10, 180]
+    两道闸门：
+    1. 没选工具时，把 action/tool 归一化成空转
+    2. next_wake_in_min 钳进 [10, 180]
     """
-    d.felt_delta = _clean_felt(d.felt_delta)
-
     if d.action != "tool" or not d.tool:
         d.action, d.tool = "none", None
     d.next_wake_in_min = max(config.WAKE_MIN_GAP, min(config.WAKE_MAX_GAP, d.next_wake_in_min))
@@ -148,7 +127,6 @@ def _parse_decision(reply: ApiReply) -> Decision:
         tool=obj.get("tool"),
         args=obj.get("args") if isinstance(obj.get("args"), dict) else {},
         why=str(obj.get("why", ""))[:200],
-        felt_delta=obj.get("felt_delta") if isinstance(obj.get("felt_delta"), dict) else {},
         next_wake_in_min=_to_int(obj.get("next_wake_in_min"), 30),
         raw=reply.content,
         tokens=reply.tokens,
@@ -203,7 +181,6 @@ def _parse_reaction(reply: ApiReply) -> Reaction:
         nxt = max(config.WAKE_MIN_GAP,
                   min(config.WAKE_MAX_GAP, _to_int(obj.get("next_wake_in_min"), 0)))
     return Reaction(
-        felt_delta=_clean_felt(obj.get("felt_delta")),
         memory=str(obj.get("memory") or "").strip(),
         next_wake_in_min=nxt,
         raw=reply.content,
@@ -220,8 +197,7 @@ def react(client, base_messages: list[dict], decision: Decision, tool: str,
     仍然写着「你读了什么」，连续性断不了。
     """
     if config.DRY_RUN:
-        return Reaction(felt_delta={"valence": 1},
-                        memory=f"（空跑模式）看了 {tool} 的结果。")
+        return Reaction(memory=f"（空跑模式）看了 {tool} 的结果。")
 
     msgs = prompt.build_reaction_messages(base_messages, decision.raw, tool, summary, detail)
     reply = _call_api(client, msgs, config.TEMPERATURE, trace_id, 1, "reaction")
@@ -256,7 +232,7 @@ def _dry_run_decision(messages: list[dict]) -> Decision:
     )
     return Decision(
         action="tool", tool="write_journal", args={"text": "（空跑模式：这是测试日记）"},
-        why="（空跑模式）", felt_delta={"valence": 2},
+        why="（空跑模式）",
         next_wake_in_min=15, parse_ok=True,
     )
 

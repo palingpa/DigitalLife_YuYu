@@ -15,15 +15,13 @@ pytest 是一个"自动检查工"。你把检查规则写成普通 Python 函数
 
 ```bash
 python -m pytest tests/ -q          # 跑全部测试，-q = 安静模式，只报结果
-python -m pytest tests/test_state.py -q      # 只跑一个文件
-python -m pytest tests/test_state.py::test_valence_tiers_match_her_actual_range -q   # 只跑一个测试
 python -m pytest tests/ -v          # 详细模式，每个测试的名字都列出来
 ```
 
 项目根目录的 `pytest.ini` 只做一件事：指定测试都在 `tests/` 里。
 这是必须的——否则 `backups/` 里的旧测试快照会被一起收集，撞名报错。
 
-**绿 vs 红**：全过显示 `86 passed`；有挂的会列出 FAILED 和失败原因，**先读它打印的 assert 信息**，多半一眼能看懂。
+**绿 vs 红**：全过显示 `72 passed`（状态层移除后测试数已重算）；有挂的会列出 FAILED 和失败原因，**先读它打印的 assert 信息**，多半一眼能看懂。
 
 > **测试日志隔离**：测试走到 `brain`/`scheduler` 里触发的调用轨迹，原本会直接写进 `logs/traces/YYYY-MM-DD.jsonl`，和真机轨迹用的是同一种 12 位 hex `trace_id`，根本分不清；空跑模式还会把提示词写到 `logs/last_prompt.txt`，测试跑完会残留测试提示词误导观测。现在由 `tests/conftest.py` 的 autouse fixture 在 pytest 启动时把这两类产物都改写到 `logs/traces_test/`（轨迹 jsonl + last_prompt.txt）。看真机轨迹用 `python -m fish.trace`、真机 last_prompt 仍在 `logs/last_prompt.txt`，都不会被测试污染；要看测试产物去 `logs/traces_test/`。
 
@@ -31,8 +29,6 @@ python -m pytest tests/ -v          # 详细模式，每个测试的名字都列
 
 | 文件 | 测的是 | 典型场景 |
 |---|---|---|
-| `test_state.py` | **身体动力学**（最重要的一组）：回归 baseline、boredom 只涨不跌、模型 delta 除以 10、模型碰不到 boredom、解闷边际递减、睡眠恢复三道闸、分档读数 | 动了 `state.py` 或 `config.py` 的动力学数字 |
-| `test_energy_battery.py` | energy「电池」模型：只在做动作时扣、只在睡觉时回血、不向 baseline 回归 | 动了 `state.py` 的 energy 结算 |
 | `test_scheduler.py` | 闹钟计算 `_next_due`：自省/错误这些"旁支行"不能抢闹钟 | 动了 `scheduler.py` 的唤醒判断 |
 | `test_memory_search.py` | 检索的相关性闸门：不相关的记忆不许靠置顶刷榜、空格是词边界、单字查询能命中 | 动了 `memory.py` 的检索/打分 |
 | `test_recall_dedup.py` | recall 去重：这轮已经看过的记忆不重复放送、全重复时如实说没有新的 | 动了 `tools._run_recall` 或 prompt 的上下文组装 |
@@ -52,8 +48,6 @@ python -m pytest tests/ -v          # 详细模式，每个测试的名字都列
 
 | 你改了 | 必须跑 | 特别注意 |
 |---|---|---|
-| `state.py` | 全部 | 这里的错是**静默的**，数据照记但全是废的 |
-| `config.py` 的动力学数字 | `test_state.py` | 很多数字有配套断言（如睡眠三道闸） |
 | `prompt.py` 文案 | 全部 | 见下面"红了怎么办"第 2 条 |
 | `scheduler.py` | `test_scheduler.py` + 全部 | |
 | `memory.py` | `test_memory_search.py` + `test_recall_dedup.py` | |
@@ -69,8 +63,7 @@ python -m pytest tests/ -v          # 详细模式，每个测试的名字都列
 @pytest.fixture()
 def conn(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")   # 把库的路径改到临时目录
-    c = db.connect()          # 在那儿建一个真 DDL 的新库
-    db.init_state(c)
+    c = db.connect()          # 在那儿建一个真 DDL 的新库（状态层已移除，不再需要 init_state）
     return c
 ```
 
@@ -87,22 +80,19 @@ monkeypatch.setattr(websearch, "fetch_page", fake)
 
 大白话：测试里凡是会调 API、访问网络的，都换成假函数。`calls` 列表是为了防"假绿"——万一代码根本没调 fetch_page，断言 `calls == [...]` 也能抓住。
 
-**3. `make_state`——造一个已知数值的身体**
-
-`test_state.py` 里的 `make_state(valence=55.45)`：造一个初始值已知的 State，方便精确断言"这步之后应该变成多少"。
+> 状态层（energy/valence/boredom）已于 2026-11-12 整体移除，因此测试里不再需要 `make_state` 之类的"造已知身体数值"辅助函数；记忆层相关的测试直接往 `memories` 表塞内容即可。
 
 ## 写一个新测试的模板
 
 ```python
 """一句话说明这组测试防的是什么回归。"""
 import pytest
-from fish import db, tools, state
+from fish import db, tools
 
 @pytest.fixture()
 def conn(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
     c = db.connect()
-    db.init_state(c)
     return c
 
 def test_某行为(conn):
@@ -121,11 +111,11 @@ def test_某行为(conn):
 1. **先读 pytest 打印的信息**：哪个文件哪个函数、assert 的是什么、实际值是什么。
 2. 问自己：是**代码错了**还是**规格变了**？
    - 代码错了（比如算错数、忘了 clamp）→ 修代码。
-   - 规格变了（你故意改了文案/规则）→ 同步改测试的断言。**先改代码还是先改测试，取决于哪边代表新意图**。已发生两次的真实案例：felt_text 文案改成"状态读数"风格、write_journal 的 desc 被简化——两次都是"测试代表的旧规格是对的，代码改动把设计意图弄丢了"，所以以测试为准修代码。改之前想清楚这边。
+   - 规格变了（你故意改了文案/规则）→ 同步改测试的断言。**先改代码还是先改测试，取决于哪边代表新意图**。已发生两次的真实案例：状态读数文案（state 层 2026-11-12 前）改成某一风格、write_journal 的 desc 被简化——两次都是"测试代表的旧规格是对的，代码改动把设计意图弄丢了"，所以以测试为准修代码。改之前想清楚这边。
 3. 挂的不止一个且看不出共同点 → 可能是你改崩了公共依赖（比如 db 的 schema），回到上一次 commit 用 `git diff` 对照。
 4. 实在找不到 → `git stash` 或回滚，别让红的过夜。
 
 ## 硬规矩（收工仪式的一部分）
 
-- 动了 `state.py`、`tests/` 或任何有对应测试的行为 → `python -m pytest tests/ -q` 全绿才能 commit。
+- 动了 `fish/` 核心模块、`tests/` 或任何有对应测试的行为 → `python -m pytest tests/ -q` 全绿才能 commit。
 - 测试全绿 ≠ 没问题，它只保证**已知会坏的地方没坏**。真正的验收还是看鱼鱼自己的轨迹（`python -m fish.trace 3`）。

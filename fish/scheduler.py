@@ -17,7 +17,7 @@ import json
 import re
 import sqlite3
 
-from . import brain, config, db, memory, prompt, state as state_mod, tools, trace, util
+from . import brain, config, db, memory, prompt, tools, trace, util
 
 # 单飞锁：同一时刻全宇宙只允许一个 wake 在跑（不变量 I3）
 wake_lock = asyncio.Lock()
@@ -50,13 +50,17 @@ def _minutes(n: int):
     return timedelta(minutes=n)
 
 
-def _should_wake(conn: sqlite3.Connection, s: state_mod.State, now) -> tuple[bool, str]:
-    """三条唤醒路径（Design_v0.2 §6.1 + 2026-11-10 通信模块）：
-    外部消息 / 到期 / 憋不住。
+def _should_wake(conn: sqlite3.Connection, now) -> tuple[bool, str]:
+    """两条唤醒路径（Design_v0.2 §6.1 + 2026-11-10 通信模块）：
+    外部消息 / 到期。
 
     外部消息优先级最高：小帕发来的、鱼鱼还没看过的消息，应当尽快让她知道。
     但受 EXTERNAL_WAKE_MIN_GAP 约束——小帕连发时不能把唤醒节奏打得太碎。
     消息在「被读」之前一直留库，间隔一到下一 tick 自然触发，不会丢。
+
+    说明：原设计有第三条「无聊憋不住 → 紧急唤醒」，由系统定义的 boredom
+    驱动。状态层（2026-11-12 移除）里已没有这道量——她不再有系统强行
+    催促的「无聊」，是否想醒来完全由她每次自己定的 next_wake_in_min 决定。
     """
     latest = db.latest_event(conn)
     since_wake = util.hours_between(now, util.parse_iso(latest["ts"])) * 60 if latest else 1e9
@@ -67,8 +71,6 @@ def _should_wake(conn: sqlite3.Connection, s: state_mod.State, now) -> tuple[boo
 
     if now >= _next_due(conn, now):
         return True, "due"
-    if s.boredom > config.BOREDOM_URGENT and since_wake > config.URGENT_COOLDOWN_MIN:
-        return True, "boredom_urgent"
     return False, ""
 
 
@@ -88,11 +90,18 @@ def _repeat_streak(conn: sqlite3.Connection, tool: str) -> int:
     return streak
 
 
-def _event_salience(valence_before: float, valence_after: float, tool: str) -> float:
-    """事件「重要度」：情绪冲击 + 主动书写加权。写入时定死，之后不再改。"""
-    sal = 0.5 + abs(valence_after - valence_before) / 20.0
+def _event_salience(tool: str) -> float:
+    """事件「重要度」：写入时定死，之后不再改。
+
+    原实现用 valence 前后差来算——valence 已随状态层（2026-11-12）移除。
+    现在仅按工具类型给一个固定权重：写下的东西（日记 / 自省）比随手搜到的
+    更值得日后想起，其余动作给基线。不再依赖任何模型自评情绪。
+    """
+    sal = 0.5
     if tool == "write_journal":
         sal += 0.3
+    elif tool == "self_review":
+        sal += 0.2
     return max(0.0, min(1.0, sal))
 
 
@@ -100,20 +109,8 @@ async def wake(conn: sqlite3.Connection, client, trigger: str) -> None:
     """一次完整的唤醒循环。§11 第 4-7 步全部串在这里。"""
     t0 = util.now()
     tid = trace.new_id()          # 本次唤醒的编号：events 行和轨迹行靠它对上
-    s = state_mod.load(conn)
 
-    # 睡眠恢复：上次唤醒到现在，间隔够长就算「睡了一觉」，energy 回血。
-    # 必须在 build_messages 之前结算——她睁眼看到的【身体】要先包含这一觉。
-    last = db.latest_event(conn)
-    if last is not None:
-        sleep_min = (t0 - util.parse_iso(last["ts"])).total_seconds() / 60.0
-        bonus = state_mod.apply_sleep_recovery(s, sleep_min)
-        if bonus > 0:   # 没睡够时长就不记，避免轨迹被打盹刷屏
-            trace.record("sleep", tid, minutes=round(sleep_min), bonus=round(bonus, 2))
-
-    before = (s.energy, s.valence, s.boredom)
-
-    messages, shown_ids = prompt.build_messages(conn, s, t0, dry_run=config.DRY_RUN)
+    messages, shown_ids = prompt.build_messages(conn, t0, dry_run=config.DRY_RUN)
     d = await asyncio.to_thread(brain.decide, client, messages, tid)
     # to_thread：把同步的 API 调用丢进工作线程，避免卡住事件循环。
     # 这是「同步库 + asyncio 共存」的标准手法，值得记住。
@@ -127,7 +124,7 @@ async def wake(conn: sqlite3.Connection, client, trigger: str) -> None:
     # 否则会出现「假消息真发出去」——2026-11-11 因此产生了跨进程的孤儿轨迹。
     if config.DRY_RUN:
         trace.record("decision", tid, action=d.action, tool=d.tool, why=d.why,
-                     felt_delta=d.felt_delta, next_wake_in_min=d.next_wake_in_min,
+                     next_wake_in_min=d.next_wake_in_min,
                      dry_run=True)
         print(f"[DRY_RUN] 已生成假决策：action={d.action} tool={d.tool} "
               f"why={d.why}（完整提示词见 {trace.last_prompt_path()}）trace_id={tid}")
@@ -140,14 +137,14 @@ async def wake(conn: sqlite3.Connection, client, trigger: str) -> None:
 
     if d.tool == "idle":
         # 主动休息（idle 工具）：等价空转的 heartbeat 路径，但这是鱼鱼「点名」
-        # 选的，不是没选工具的兜底。不 dispatch、不第二段反应、不花能量（cost 0）。
+        # 选的，不是没选工具的兜底。不 dispatch、不第二段反应（cost 0）。
         # 她的休息理由走 fact/why，让她下次醒来能看到「我主动休息过」——
         # 这正是把「none=休息」从隐式兜底变成可命名、可主动选择的关键一步。
-        state_mod.apply_felt_delta(s, d.felt_delta)
+        # 状态层已移除，休息不再有「回能」含义，纯粹是叙事上的主动性标记。
         ok = False
         is_idle = True
     elif d.action == "tool" and d.tool:
-        result = tools.dispatch(d.tool, d.args, conn, s, seen_ids=shown_ids,
+        result = tools.dispatch(d.tool, d.args, conn, seen_ids=shown_ids,
                                 client=client, trace_id=tid)
         ok = result.ok
 
@@ -162,7 +159,7 @@ async def wake(conn: sqlite3.Connection, client, trigger: str) -> None:
         # 唯一的例外是 write_journal：日记本身就是反思，不需要再把刚写的
         # 原文念一遍让她「回应自己的日记」（那等于对反思再做一次反思）。
         # send_message 同理：给小帕的一句话写完即止，不进第二段，否则会给
-        # 「我给小帕发了句话」再生成一段「回应自己的话」，既冗余又重复算情绪。
+        # 「我给小帕发了句话」再生成一段「回应自己的话」，既冗余又重复。
         # 空转和失败没有 detail，也就不多花那一次调用。
         if ok and (result.detail or "").strip() and d.tool not in (
                 "write_journal", "send_message", "self_review"):
@@ -170,27 +167,15 @@ async def wake(conn: sqlite3.Connection, client, trigger: str) -> None:
                 brain.react, client, messages, d, d.tool,
                 result.summary, result.detail, tid,
             )
-            # 情绪以后果为准：第一段那个 felt_delta 是「猜」，
-            # 这一段才是「看完之后的感觉」。两者冲突时听后者。
-            state_mod.apply_felt_delta(s, reaction.felt_delta)
             memory_text = reaction.memory if reaction.parse_ok else ""
             if reaction.next_wake_in_min:
                 d.next_wake_in_min = reaction.next_wake_in_min   # 读完可以改主意
-        else:
-            # 走这里有两种情况：
-            #  - 空转 / 失败 / 工具没返回可消化内容（如 inbox 是空的）——
-            #    挫败感交给规则侧（apply_tool_effect 扣 valence），不额外调用。
-            #  - 刻意单段的工具（write_journal）：日记写完即止，不回念。
-            # 这些情况下「看完之后的感觉」不存在，就用第一段给的 felt_delta。
-            state_mod.apply_felt_delta(s, d.felt_delta)
-
-        state_mod.apply_tool_effect(s, d.tool, ok, _repeat_streak(conn, d.tool))
+        # 否则：空转 / 失败 / 工具没返回可消化内容（如 inbox 是空的）/ 刻意单段
+        # 工具（write_journal 等）。状态层已移除，不再有「挫败感扣 valence」
+        # 之类的规则侧副作用——这些分支只是「不进第二段」，无需额外动作。
     else:
-        # 空转：没有后果，只有「此刻醒来时的感觉」，用第一段给的值
-        state_mod.apply_felt_delta(s, d.felt_delta)
+        # 空转：没选工具。什么都不做，只留一条 heartbeat 事件。
         ok = False   # 空转不算成功做事
-
-    after = (s.energy, s.valence, s.boredom)
 
     kind = "heartbeat" if (d.action == "none" or is_idle) else ("error" if not d.parse_ok else "event")
     if result and not result.ok and d.action == "tool":
@@ -203,17 +188,12 @@ async def wake(conn: sqlite3.Connection, client, trigger: str) -> None:
         tokens_in += reaction.tokens[0]
         tokens_out += reaction.tokens[1]
 
-    # 注意：这里必须显式写出六个值的对应关系。
-    # 曾经用 *before, *after 解包，但列是 before/after 交错的，
-    # 结果 energy_after 落的是 valence……这种错位会静默毁掉
-    # §10.2 的全部观测数据，而且测试发现不了——列名都对，只是串了。
     cur = conn.execute(
         """INSERT INTO events
            (ts, kind, trigger, tool, args_json, result_summary, why,
-            energy_before, energy_after, valence_before, valence_after,
-            boredom_before, boredom_after, next_wake_at,
+            next_wake_at,
             tokens_in, tokens_out, duration_ms, parse_ok, trace_id)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             util.now_iso(), kind, trigger, d.tool,
             json.dumps(d.args, ensure_ascii=False) if d.args else None,
@@ -226,9 +206,6 @@ async def wake(conn: sqlite3.Connection, client, trigger: str) -> None:
                 )
             ),
             d.why or "（没说理由）",
-            before[0], after[0],        # energy
-            before[1], after[1],        # valence
-            before[2], after[2],        # boredom
             next_wake.isoformat(timespec="seconds"),
             tokens_in, tokens_out,
             int((util.now() - t0).total_seconds() * 1000),
@@ -244,7 +221,7 @@ async def wake(conn: sqlite3.Connection, client, trigger: str) -> None:
     if kind == "event" and memory_text:
         memory.add_episodic(
             conn, memory_text,
-            salience=_event_salience(before[1], after[1], d.tool or ""),
+            salience=_event_salience(d.tool or ""),
             tags=d.tool,
             source_event_id=cur.lastrowid,
         )
@@ -253,16 +230,15 @@ async def wake(conn: sqlite3.Connection, client, trigger: str) -> None:
     # 同轮守卫：如果她这一轮自己选了 self_review 工具，就不再强制自动自省，
     # 避免「主动做一次 + 定时又来一次」重复刷新同一份叙事。
     if db.wake_count(conn) % config.SELF_REVIEW_EVERY == 0 and d.tool != "self_review":
-        # 自省是「制度」，不是「能力」：它坏了不该拖垮整次唤醒。
-        # 注意 state_mod.save 在下面——这里一旦抛异常，这次唤醒的
-        # 状态变更就全部丢失，而 events 已经写进去了，账会对不上。
+    # 自省是「制度」，不是「能力」：它坏了不该拖垮整次唤醒。
+    # 注意下面 conn.commit()——这里一旦抛异常，自省那部分写入的
+    # 记忆就全部回滚，而 events 已经写进去了，账会对不上。
         try:
             await _self_review(conn, client, tid)
         except Exception as e:
             trace.record("error", tid, where="self_review",
                          error=f"{type(e).__name__}: {e}")
 
-    state_mod.save(conn, s)
     conn.commit()
 
 
@@ -293,16 +269,8 @@ async def run(conn: sqlite3.Connection, client) -> None:
     print(f"鱼鱼醒了。（模式：{'DRY_RUN 空跑' if config.DRY_RUN else '真实 API'}）")
     while True:
         now = util.now()
-        s = state_mod.load(conn)
 
-        # 时间的自然流逝先记账：状态回归按 updated_at 到现在折算
-        updated = util.parse_iso(
-            conn.execute("SELECT updated_at FROM state WHERE id=1").fetchone()["updated_at"]
-        )
-        state_mod.tick_regress(s, (now - updated).total_seconds() / 60.0)
-        state_mod.save(conn, s)
-
-        go, trigger = _should_wake(conn, s, now)
+        go, trigger = _should_wake(conn, now)
         if go:
             if wake_lock.locked():
                 pass                       # I3：上一次还没跑完，跳过本次 tick

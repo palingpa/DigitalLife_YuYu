@@ -13,7 +13,7 @@ python -m pip install -r requirements.txt
 #    Git Bash:            FISH_DRY_RUN=1 python -m fish.main
 #    看到 wake(due) 的输出、logs/last_prompt.txt 有内容即为链路通。
 
-# 3. 跑测试（状态动力学的 10 项检查，改动 state.py 后务必重跑）
+# 3. 跑测试（全链路回归，改动核心模块后务必重跑）
 python -m pytest tests/ -q
 
 # 4. 真跑
@@ -30,8 +30,8 @@ python -m pytest tests/ -q
 # 最近 20 条唤醒
 sqlite3 data/fish.db "SELECT ts, kind, tool, why FROM events ORDER BY id DESC LIMIT 20"
 
-# 心情轨迹
-sqlite3 data/fish.db "SELECT ts, energy_after, valence_after, boredom_after FROM events ORDER BY id DESC LIMIT 30"
+# 记忆层观察（状态层已移除，不再有心情数值；看她"记住了什么"）
+sqlite3 data/fish.db "SELECT ts, layer, substr(content,1,40) FROM memories ORDER BY id DESC LIMIT 20"
 
 # 最近一次调用的完整输入/输出/思考过程（最有用）
 python -m fish.trace 3
@@ -50,7 +50,7 @@ python -m fish.trace 3
 - `kind`：`decision`（第一段·决策）/ `reaction`（第二段·反应）/ `tool_result`
 
 **一次唤醒可能是两段调用**，用同一个 `trace_id`。第二段是「看完结果之后的反应」——
-`felt_delta` 和 `memory` 都产生在第二段，所以 `reaction` 那行才是她真正记住的东西。
+`memory` 产生在第二段，所以 `reaction` 那行才是她真正记住的东西。
 `python -m fish.trace 3` 会按顺序把两段都打出来。
 
 另外每次工具调用的 `detail`（文章全文等）也会以 `tool_result` 记一行——
@@ -88,17 +88,16 @@ Ctrl+C 停止。状态、记忆、日志全部实时落库（SQLite WAL），重
 fish/
   config.py      所有魔法数字
   db.py          SQLite + DDL + 老库迁移
-  state.py       身体：三轴动力学（最重要的 100 行）
   memory.py      记忆：三层存储 + 打分检索
   prompt.py      一次 wake 的上下文组装
   brain.py       DeepSeek 调用 + 解析 + 降级 + 写轨迹
   trace.py       调用轨迹的写入与查看（python -m fish.trace）
   scheduler.py   tick / 唤醒判断 / 单飞锁 / 自省
-  tools/         read_feed / write_journal / recall / web_search
+  tools/         read_feed / write_journal / recall / web_search / idle（主动休息）
   feed.py        RSS/Atom 抓取（含代理降级）
   websearch.py   DeepSeek Search/Fetch API 封装（联网搜索与按需抓全文）
   main.py        入口
-tests/           状态动力学单测
+tests/           回归测试（记忆层/工具/通信/调度）
 data/            fish.db（记忆与日志，已在 .gitignore）
 logs/            traces/*.jsonl 调用轨迹 + last_prompt.txt
 ```

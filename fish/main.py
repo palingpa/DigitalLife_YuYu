@@ -17,7 +17,6 @@ async def main() -> None:
     lock.acquire(mode_label=mode)
 
     conn = db.connect()
-    db.init_state(conn)
 
     client = brain.make_client()
     if not config.DRY_RUN and not config.DEEPSEEK_API_KEY:

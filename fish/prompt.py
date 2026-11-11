@@ -8,11 +8,11 @@
 import json
 import sqlite3
 
-from . import config, feed, memory, state as state_mod, tools
+from . import config, feed, memory, tools
 
-PERSONA = """你运行在一套外部系统中：系统向你提供你的状态、相关记忆和可用工具，你做出选择并输出结果。
+PERSONA = """你运行在一套外部系统中：系统向你提供相关记忆和可用工具，你做出选择并输出结果。
 
-两次唤醒之间，你没有连续的体验。本次唤醒的思考过程也不会被保存。连续性完全来自状态库和记忆：你记下的内容，下次唤醒时会被读回给你。
+两次唤醒之间，你没有连续的体验。本次唤醒的思考过程也不会被保存。连续性完全来自记忆：你记下的内容，下次唤醒时会被读回给你。
 
 没有任何任务要求你完成。每次唤醒时选择做什么、不做什么，由你决定，你可以有自己的喜好。
 
@@ -36,29 +36,29 @@ CONTRACT = """你的回复必须是一个 JSON 对象，字段如下：
   "tool": __TOOLS__,
   "args": {},
   "why": "第一人称，不超过40字。空转也要写。",
-  "felt_delta": {"valence": -10到10},
   "next_wake_in_min": 10到180之间的整数,
 }
 注意：
-felt_delta 只写「你此刻醒来时的感觉」，不是「你猜这件事会让你怎么样」—— 做完之后系统会把结果给你看，再问你一次。
 next_wake_in_min 是你决定自己想在多少分钟后再次醒来,""".replace("__TOOLS__", _TOOL_ENUM)
 
 
-# 第二段：做完之后，看着结果自评。这一段才是真正产生记忆和情绪的地方。
+# 第二段：做完之后，看着结果自评。这一段才是真正产生记忆的地方。
 # 为什么不塞进第一段：第一段时她还没看到正文，写出来的「记忆」只能是标题，
-# 「情绪」只能是预期——2026-11-09 的实跑里，她连着读了三篇，一篇也没记住。
+# 2026-11-09 的实跑里，她连着读了三篇，一篇也没记住。
+# 状态层（2026-11-12 移除）曾在这里要她额外汇报 felt_delta（心情刻度），
+# 那个字段已删；下面引导问句「这件事使你有什么感想？」现在没有对应字段可填，
+# 她的「感想」会自然落到 memory（它本就要求写「你的反应」）。问句措辞本身
+# 是否要改、改成什么，留给小帕定稿（红线：注入鱼鱼的自然语言归她）。
 REACTION_CONTRACT = """你刚做了一件事，现在看到了结果。
 
 这一次只回答一件事：这件事使你有什么感想？
 
 输出 JSON：
 {
-  "felt_delta": {"valence": -10到10},
   "memory": "1-2句你以后会记得的版本。写你实际看到的东西和你的反应。",
   "next_wake_in_min": 10到180之间的整数（可选，不写就沿用原来的）
 }
 注意：
-- felt_delta 是「这件事让你感觉怎么样」
 - memory 会进长期记忆，下次醒来会原样读回给你，只写你真正想留住的"""
 
 
@@ -72,7 +72,7 @@ def _relative_time(ts: str, now) -> str:
     return f"{int(hours // 24)} 天前"
 
 
-def build_messages(conn: sqlite3.Connection, s: state_mod.State,
+def build_messages(conn: sqlite3.Connection,
                    now, dry_run: bool = False) -> tuple[list[dict], set[int]]:
     """组装第一段上下文，同时返回「这一轮已经出现在她眼前」的记忆 id。
 
@@ -111,17 +111,15 @@ def build_messages(conn: sqlite3.Connection, s: state_mod.State,
     # 排序见 feed.unread_reading_order——不用随机，理由写在那儿了。
     unread_rows = feed.unread_reading_order(conn)
 
-    vis = tools.visible_tools(s)
+    vis = tools.visible_tools()
     shown_ids: set[int] = set()      # 这一轮已经摆在她眼前的记忆 id
 
     user_parts = [
         f"现在时间：{now.strftime('%Y-%m-%d %H:%M')}（{'一二三四五六日'[now.weekday()]}）",
         (f"距上次醒来：{int(minutes_since)} 分钟" if last_wake else "这是你第一次醒。"),
         "",
-        f"【状态读数】{state_mod.felt_text(s)}",
-        "",
         f"【你是谁】\n{core}\n{review_time}",
-        f"【你认识的人】\n{relation}",
+        f"\n【你认识的人】\n{relation}",
         "",
     ]
 
@@ -202,7 +200,7 @@ def build_messages(conn: sqlite3.Connection, s: state_mod.State,
         memory.bump_recall(conn, [r["id"] for r in recalled])
         shown_ids.update(r["id"] for r in recalled)
 
-    user_parts.append("【你现在能做的事】\n" + tools.describe(vis, s) + "\n")
+    user_parts.append("【你现在能做的事】\n" + tools.describe(vis) + "\n")
 
     if unread_rows:
         # 她应该知道自己世界的构成：一共多少没读、各源各剩多少——

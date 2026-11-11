@@ -3,7 +3,10 @@
 回归点（2026-11-10）：用户发现 write_journal 也走两段式，等于让她对自己的反思
 再做一次反思；而且情绪会被算两次（工具效果 +3 与第二段自报的 felt_delta 叠加，
 对别的工具是「内容感受 vs 费力程度」两个维度，对写日记却是同一件事）。
-单段化后：不触发第二段、只落一条日记记忆、valence 仅由工具效果 +3 调整。
+单段化后：不触发第二段、只落一条日记记忆。
+
+注意：状态层（2026-11-12 删除）之后，已没有 valence 之类的系统量可调；
+本测试只守「单段 + 只落一条日记记忆」的契约。
 """
 
 import asyncio
@@ -16,7 +19,6 @@ from fish.brain import Decision, Reaction
 def test_write_journal_skips_second_pass(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "t.db")
     c = db.connect()
-    db.init_state(c)
 
     calls = {"react": 0}
 
@@ -25,20 +27,17 @@ def test_write_journal_skips_second_pass(tmp_path, monkeypatch):
         return Decision(
             action="tool", tool="write_journal",
             args={"text": "这是一条测试日记"},
-            felt_delta={"energy": 0, "valence": 0},
             why="想留下这段话", next_wake_in_min=30,
         )
 
     def fake_react(client, messages, d, tool, summary, detail, tid):
         calls["react"] += 1
-        return Reaction(felt_delta={"valence": -2}, memory="事后元评论", parse_ok=True)
+        return Reaction(memory="事后元评论", parse_ok=True)
 
     monkeypatch.setattr("fish.brain.decide", fake_decide)
     monkeypatch.setattr("fish.brain.react", fake_react)
 
-    before = c.execute("SELECT valence FROM state").fetchone()[0]
     asyncio.run(scheduler.wake(c, None, trigger="test"))
-    after = c.execute("SELECT valence FROM state").fetchone()[0]
 
     # 1) 没有触发第二段（没有「回应自己的日记」那次调用）
     assert calls["react"] == 0
@@ -55,6 +54,3 @@ def test_write_journal_skips_second_pass(tmp_path, monkeypatch):
         "SELECT content, pinned, tags, source_event_id FROM memories"
     ).fetchone()
     assert journal["source_event_id"] is None
-
-    # 4) valence 只受工具效果 +3 影响（第一段 felt_delta 为 0，无第二段自报）
-    assert after == before + 3.0

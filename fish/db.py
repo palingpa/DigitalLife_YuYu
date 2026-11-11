@@ -16,14 +16,6 @@ DB_PATH = config.DATA_DIR / "fish.db"
 SCHEMA = """
 PRAGMA journal_mode = WAL;
 
-CREATE TABLE IF NOT EXISTS state (
-  id            INTEGER PRIMARY KEY CHECK (id = 1),
-  energy        REAL NOT NULL,
-  valence       REAL NOT NULL,
-  boredom       REAL NOT NULL,
-  updated_at    TEXT NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS events (
   id             INTEGER PRIMARY KEY AUTOINCREMENT,
   ts             TEXT    NOT NULL,
@@ -33,9 +25,6 @@ CREATE TABLE IF NOT EXISTS events (
   args_json      TEXT,
   result_summary TEXT,
   why            TEXT    NOT NULL,
-  energy_before  REAL, energy_after  REAL,
-  valence_before REAL, valence_after REAL,
-  boredom_before REAL, boredom_after REAL,
   next_wake_at   TEXT,
   tokens_in      INTEGER DEFAULT 0,
   tokens_out     INTEGER DEFAULT 0,
@@ -116,24 +105,18 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "link" not in icols:
         conn.execute("ALTER TABLE inbox ADD COLUMN link TEXT")
 
-
-def init_state(conn: sqlite3.Connection) -> None:
-    """保证 state 表恰好有一行（id=1）。
-
-    INSERT OR IGNORE：已存在就什么都不做，不存在才插入初始值。
-    这是"只在第一次启动时播种"的标准写法。
-    """
-    conn.execute(
-        """INSERT OR IGNORE INTO state (id, energy, valence, boredom, updated_at)
-           VALUES (1, ?, ?, ?, ?)""",
-        (
-            config.BASELINE["energy"],
-            config.BASELINE["valence"],
-            30.0,                      # boredom 的初始/常态值，见 Design_v0.2 §4.1
-            util.now_iso(),
-        ),
-    )
-    conn.commit()
+    # 状态层整体移除（2026-11-12）：删掉 old 库的 state 表与 events 的
+    # 六个能量列（energy/valence/boredom × before/after）。新库在建表时
+    # 已不再有这些列；这里只负责把老库也清掉，保持 schema 与代码一致。
+    conn.execute("DROP TABLE IF EXISTS state")
+    ecols = {r["name"] for r in conn.execute("PRAGMA table_info(events)")}
+    for col in ("energy_before", "energy_after", "valence_before",
+                "valence_after", "boredom_before", "boredom_after"):
+        if col in ecols:
+            try:
+                conn.execute(f"ALTER TABLE events DROP COLUMN {col}")
+            except sqlite3.OperationalError:
+                pass  # 极端老版本不支持 DROP COLUMN 时跳过，新行不再写这些列即可
 
 
 def latest_event(conn: sqlite3.Connection) -> sqlite3.Row | None:

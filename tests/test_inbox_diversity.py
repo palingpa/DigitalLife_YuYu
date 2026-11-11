@@ -10,14 +10,13 @@
 
 import pytest
 
-from fish import config, db, feed, prompt, state, tools, util
+from fish import config, db, feed, prompt, tools, util
 
 
 @pytest.fixture()
 def conn(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
     c = db.connect()
-    db.init_state(c)
     return c
 
 
@@ -68,16 +67,16 @@ def test_read_feed_index_matches_world_numbering(conn):
     _put(conn, ZHIHU, "知乎新")
     _put(conn, SSPAI, "少数派最新")           # 后插入 = 全场最新
 
-    res0 = tools.dispatch("read_feed", {"index": 0}, conn, state.load(conn))
+    res0 = tools.dispatch("read_feed", {"index": 0}, conn)
     assert "少数派最新" in res0.summary       # [0] = 全场最新
 
     # 读完一条，两边都重新编号：新一轮【世界】的 [0] 和 read_feed 的
     # [0] 必须还是同一条——同序是「编号」成立的前提，不是巧合
-    msgs, _ = prompt.build_messages(conn, state.load(conn), util.now())
+    msgs, _ = prompt.build_messages(conn, util.now())
     # 知乎在「抓不回原文」名单里 → [0] 这条知乎会带无正文记号（用 config 常量，
     # 不硬编码最终措辞，小帕改 INBOX_NOFULLTEXT_MARK 时测试不会跟着红）。
     assert f"[0]{config.INBOX_NOFULLTEXT_MARK}《知乎新》（知乎热榜）" in msgs[-1]["content"]
-    res1 = tools.dispatch("read_feed", {"index": 0}, conn, state.load(conn))
+    res1 = tools.dispatch("read_feed", {"index": 0}, conn)
     assert "知乎新" in res1.summary
 
 
@@ -87,7 +86,7 @@ def test_world_shows_per_source_stock_and_labels(conn):
     for i in range(2):
         _put(conn, SSPAI, f"少数派第{i}条")
 
-    msgs, _ = prompt.build_messages(conn, state.load(conn), util.now())
+    msgs, _ = prompt.build_messages(conn, util.now())
     # 工具清单的提示词里也提到「【世界】」，所以要按带 inbox 的那段切
     world = msgs[-1]["content"].split("【世界】inbox")[1]
 
@@ -136,7 +135,7 @@ def test_world_preview_marks_nofulltext_source(conn):
     """【世界】预览里，知乎条目带无正文记号，少数派不带。"""
     _put(conn, ZHIHU, "知乎问题A", body="短开头")
     _put(conn, SSPAI, "少数派文章B", body="正文。")
-    msgs, _ = prompt.build_messages(conn, state.load(conn), util.now())
+    msgs, _ = prompt.build_messages(conn, util.now())
     world = msgs[-1]["content"].split("【世界】inbox")[1]
     zhihu_line = next(l for l in world.splitlines() if "知乎问题A" in l)
     sspai_line = next(l for l in world.splitlines() if "少数派文章B" in l)

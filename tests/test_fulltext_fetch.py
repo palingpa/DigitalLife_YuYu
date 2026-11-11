@@ -12,14 +12,13 @@ import sqlite3
 
 import pytest
 
-from fish import config, db, feed, state, tools, util, websearch
+from fish import config, db, feed, tools, util, websearch
 
 
 @pytest.fixture()
 def conn(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
     c = db.connect()
-    db.init_state(c)
     return c
 
 
@@ -96,7 +95,7 @@ def test_short_body_with_link_gets_fulltext(conn, monkeypatch):
     calls = _fake_fetch(monkeypatch)
     _put(conn, "壳", "只有开头一段", link="https://test.example/post/1")
 
-    res = tools.dispatch("read_feed", {"index": 0}, conn, state.load(conn))
+    res = tools.dispatch("read_feed", {"index": 0}, conn)
     assert res.ok
     assert calls == ["https://test.example/post/1"]
     assert res.detail.startswith("这是抓回来的全文")       # 她读到的是全文
@@ -112,7 +111,7 @@ def test_fetch_failure_is_explained_not_blamed_on_content(conn, monkeypatch):
     monkeypatch.setattr(websearch, "fetch_page", boom)
     _put(conn, "壳", "只有开头一段", link="https://test.example/post/2")
 
-    res = tools.dispatch("read_feed", {"index": 0}, conn, state.load(conn))
+    res = tools.dispatch("read_feed", {"index": 0}, conn)
     assert res.ok
     assert "只有开头一段" in res.detail
     assert "RSS 只给了" in res.detail          # 说清楚是渠道的问题
@@ -125,7 +124,7 @@ def test_long_body_or_no_link_never_fetches(conn, monkeypatch):
     _put(conn, "没链接", "短正文")
 
     for i in (0, 1):
-        tools.dispatch("read_feed", {"index": i}, conn, state.load(conn))
+        tools.dispatch("read_feed", {"index": i}, conn)
     assert calls == []                         # 两种情况都不该花钱去抓
 
 
@@ -134,6 +133,6 @@ def test_dry_run_never_fetches(conn, monkeypatch):
     monkeypatch.setattr(config, "DRY_RUN", True)
     _put(conn, "壳", "只有开头一段", link="https://test.example/post/3")
 
-    res = tools.dispatch("read_feed", {"index": 0}, conn, state.load(conn))
+    res = tools.dispatch("read_feed", {"index": 0}, conn)
     assert res.ok and calls == []
     assert "只有开头一段" in res.detail

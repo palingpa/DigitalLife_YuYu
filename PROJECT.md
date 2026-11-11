@@ -5,7 +5,7 @@
 
 ## 这个项目是什么
 
-本地养一只自主 agent「鱼鱼」（DeepSeek 远端 API），通过状态库、工具层、
+本地养一只自主 agent「鱼鱼」（DeepSeek 远端 API），通过工具层、
 调度与分层记忆，长期观察它"进化"成什么样。娱乐型研究项目。
 
 ## 文档地图（去哪里找什么）
@@ -23,16 +23,22 @@
 ## 三条不变量（违反 = bug）
 
 - **I1** heartbeat 永不写 memories
-- **I2** 模型输出不直接成为状态值（必须经 state.py 的动力学规则）
+- **I2** （状态层 2026-11-12 整体移除后退役）原意为「模型输出不直接成为状态值」；
+  现等价纪律为「模型原始输出须经解析校验（parse_ok）才往下传，解析失败绝不沿用上次结果」
+  （见 `brain._parse_*`）。没有状态值可成为，这条的本质仍是「模型说的不算数，校验过的才算」。
 - **I3** 单飞，两层保证：进程级——本机同一时刻只有一个鱼鱼进程（`fish/lock.py`，
   `data/fish.lock` 的 OS 锁，不分 DRY_RUN/真实，`main` 第一行抢锁）；进程内——
   同一时刻仅一个 wake（`scheduler.py` 的 `wake_lock`）
 
-## 当前状态（2026-11-10）
+## 当前状态（2026-11-12）
 
-- v0.2 全链路已建成并**真跑中**：`data/fish.db` 有 21 条 events、16 条 memories
-- 已见 heartbeat / self_review / web_search 等行为，自省机制已触发过
+- v0.2 全链路已建成并**真跑中**；**状态层（energy/valence/boredom）已于本日整体删除**：
+  不再有系统定义的精力/情绪/无聊，是否醒来完全由鱼鱼每次自己定的 `next_wake_in_min` 决定；
+  项目重心落在记忆层（详见 DEVLOG 末条 + Design_v0.2 关于状态层的章节现已部分失效）。
+- 已见 heartbeat / self_review / web_search / idle 等行为，自省机制已触发过
 - 待办/观察项见 Design_v0.2 §10.2（一周后看五个数）；FEED_SOURCES 待填 RSS
+- 注意：状态层删除后，`data/fish.db` 的 `state` 表与 `events` 的六个能量列由
+  `db._migrate()` 在下次连接时 DROP（SQLite 3.53+ 支持），真实库无需手动迁移
 
 ## 工作流程（硬性约定，小帕与 Kite 都要遵守）
 
@@ -45,7 +51,7 @@
 
 ### 收工仪式 —— 每轮有实际改动必做
 
-1. 动了 `state.py` 或 tests/ → 跑 `python -m pytest tests/ -q`
+1. 动了 `fish/` 核心模块或 tests/ → 跑 `python -m pytest tests/ -q`
 2. 小步提交：一次改动一个 commit，message 写清"改了什么"，谁改谁提交
 3. 在 `DEVLOG.md` 追加一条（格式见该文件头部）
 
@@ -64,7 +70,6 @@ Kite 的职责是提出「这段提示词需要改」，说明位置（文件:�
 范围（不限于）：
 - `fish/prompt.py`：PERSONA、CONTRACT、REACTION_CONTRACT、REVIEW_CONTRACT、
   CORE_PLACEHOLDER，以及 `build_messages` 里所有【】标签与措辞（如「你事后心里想」）
-- `fish/state.py` 的 `felt_text`：三轴读数的用词与分档
 - `fish/tools/__init__.py`：每个工具的 `desc`、`args_hint` 文字
 - 任何未来会被拼进 messages 的字符串
 
