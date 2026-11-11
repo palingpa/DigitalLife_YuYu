@@ -1,6 +1,6 @@
 # ARCHITECTURE.md — 鱼鱼架构说明（大白话版）
 
-> 给"想知道这摊东西怎么转起来"的人看。不复制 Design_v0.2 的论证，只讲**有什么、在哪、改它会碰坏什么**。
+> 给"想知道这摊东西怎么转起来"的人看。设计基线见 `Design_v0.3.md`（记忆层为重心）；本文不复制它的论证，只讲**有什么、在哪、改它会碰坏什么**。
 > **维护约定：调整项目结构、加删模块、改数据表时，必须同步更新本文件**（收工仪式的一部分）。
 
 ## 一句话总览
@@ -52,7 +52,7 @@
 | `prompt.py` | 把上下文拼成发给模型的文字。三份合同：CONTRACT（第一段）、REACTION_CONTRACT（第二段）、REVIEW_CONTRACT（自省） | **措辞就是她的世界观**。改一个词（如"记下"→"心里想"）都会改变她的行为，改完看对应测试 |
 | `brain.py` | 调 API、解析 JSON、解析失败重试一次再降级。模型说什么不算数，解析通过才算 | 新增字段要过 `_clamp_decision` 的钳制，别让模型原始输出直接生效 |
 | `scheduler.py` | 作息表：tick 时钟、唤醒判断、单飞锁、自省闸门。`wake()` 是全项目的主动脉 | 唤醒判断改坏 = 她闷睡 4 小时或疯狂醒来 |
-| `tools/__init__.py` | 鱼鱼能干的 5 件事：read_feed / write_journal / recall / web_search / idle（主动休息，纯叙事标记）。加新工具在这登记 ALL_TOOLS | summary ≤ 百字的纪律别破；新工具返回 detail 就自动进第二段，不用改调度 |
+| `tools/__init__.py` | 鱼鱼能干的 7 件事：read_feed / write_journal / recall / web_search / idle（主动休息，纯叙事标记）。加新工具在这登记 ALL_TOOLS | summary ≤ 百字的纪律别破；新工具返回 detail 就自动进第二段，不用改调度 |
 | `feed.py` | 抓 RSS（含代理三档降级）、解析、入库。排序是"各源轮转" | `unread_reading_order` 同时供【世界】编号和 read_feed 用，两处必须同序 |
 | `websearch.py` | DeepSeek 官方搜索/抓全文 API 的薄封装（标准库 urllib，不引第三方） | 计费接口。测试里全用假函数替换，别在测试里真调 |
 | `trace.py` | 每次 API 调用的完整原文（含思考过程），存 `logs/traces/日期.jsonl`。`python -m fish.trace 3` 看 | 追加日志，随便动 |

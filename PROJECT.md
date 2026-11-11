@@ -12,11 +12,12 @@
 
 | 想知道 | 看 |
 |---|---|
-| 为什么这么设计（DDL、动力学、两段式输出） | `Design_v0.2.md` |
+| 为什么这么设计（DDL、记忆层、检索、自省、调度） | `Design_v0.3.md` |
 | 怎么跑、怎么观察、目录速览 | `README.md` |
 | **架构大白话：模块/数据/改哪儿会碰坏什么** | `ARCHITECTURE.md` |
 | **测试大白话：pytest 入门 + 8 个测试文件地图 + 改了 X 跑什么** | `TESTING.md` |
 | v0.1 原始草稿（历史记录，别改） | `Draft.md` |
+| v0.2 设计（历史，已被 v0.3 取代，状态层章节已失效） | `Design_v0.2.md` |
 | 每次改动的时间线与理由 | `DEVLOG.md`（追加式） |
 | 所有魔法数字 | `fish/config.py`（每项注明 Design 出处） |
 
@@ -30,15 +31,20 @@
   `data/fish.lock` 的 OS 锁，不分 DRY_RUN/真实，`main` 第一行抢锁）；进程内——
   同一时刻仅一个 wake（`scheduler.py` 的 `wake_lock`）
 
-## 当前状态（2026-11-12）
+## 当前状态（2026-11-12，基线 Design_v0.3）
 
-- v0.2 全链路已建成并**真跑中**；**状态层（energy/valence/boredom）已于本日整体删除**：
-  不再有系统定义的精力/情绪/无聊，是否醒来完全由鱼鱼每次自己定的 `next_wake_in_min` 决定；
-  项目重心落在记忆层（详见 DEVLOG 末条 + Design_v0.2 关于状态层的章节现已部分失效）。
-- 已见 heartbeat / self_review / web_search / idle 等行为，自省机制已触发过
-- 待办/观察项见 Design_v0.2 §10.2（一周后看五个数）；FEED_SOURCES 待填 RSS
+- **设计基线已切换到 `Design_v0.3.md`**：状态层（energy/valence/boredom）已于本日
+  整体删除（commit `dd090a7`，理由见 DEVLOG 2026-11-12 02:09）。不再有系统定义的
+  精力/情绪/无聊；是否醒来完全由鱼鱼每次自己定的 `next_wake_in_min` 决定。
+- **记忆层成为鱼鱼连续性的唯一支柱**，v0.3 的主线就是"改进记忆层"
+  （Design_v0.3 §5.5 的 M1–M5 工作包：复用强化 / 自动主题标签 / 睡眠整理 /
+  可选本地语义检索 / 记忆健康观测）。
+- `Design_v0.2.md` 与 `Draft.md` 同为历史记录，不再作为实现依据。
+- 已见 heartbeat / self_review / web_search / idle / send_message 等行为，自省机制已触发过。
+- 观测指标见 Design_v0.3 §10（记忆健康五指标，已替换 v0.2 失效的"心情-选择互信息"）；
+  FEED_SOURCES 待小帕填 RSS。
 - 注意：状态层删除后，`data/fish.db` 的 `state` 表与 `events` 的六个能量列由
-  `db._migrate()` 在下次连接时 DROP（SQLite 3.53+ 支持），真实库无需手动迁移
+  `db._migrate()` 在下次连接时 DROP（SQLite 3.53+ 支持），真实库无需手动迁移。
 
 ## 工作流程（硬性约定，小帕与 Kite 都要遵守）
 

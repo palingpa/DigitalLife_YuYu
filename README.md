@@ -1,6 +1,6 @@
 # 鱼鱼 · 运行手册
 
-设计文档见 `Design_v0.2.md`（为什么这么设计），本文只讲怎么跑。
+设计文档见 `Design_v0.3.md`（为什么这么设计），本文只讲怎么跑。
 
 ## 首次运行
 
@@ -68,7 +68,7 @@ SELECT ts, kind, tool, why, trace_id FROM events ORDER BY id DESC LIMIT 5;
 
 ## 配置
 
-全部参数在 `fish/config.py`，每个数字都注明了出处（Design_v0.2 的 §号）。
+全部参数在 `fish/config.py`，每个数字都注明了出处（Design_v0.3 的 §号）。
 最常动的三个：
 
 - `MODEL`：接好 V4.1F 后改成官方 model id
@@ -93,7 +93,7 @@ fish/
   brain.py       DeepSeek 调用 + 解析 + 降级 + 写轨迹
   trace.py       调用轨迹的写入与查看（python -m fish.trace）
   scheduler.py   tick / 唤醒判断 / 单飞锁 / 自省
-  tools/         read_feed / write_journal / recall / web_search / idle（主动休息）
+  tools/         read_feed / write_journal / recall / web_search / send_message / self_review / idle（主动休息）
   feed.py        RSS/Atom 抓取（含代理降级）
   websearch.py   DeepSeek Search/Fetch API 封装（联网搜索与按需抓全文）
   main.py        入口
