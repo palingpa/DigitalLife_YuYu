@@ -16,7 +16,8 @@ def _tmp_db():
     return conn
 
 
-def _fake_review(client, old_core, old_relation="", exchanges="", trace_id=""):
+def _fake_review(client, old_core, old_relation="", exchanges="", trace_id="",
+                 experiences="", time_anchor=""):
     return {"new_core": "新版自我叙事。", "new_relation": "小帕是维护者。"}
 
 

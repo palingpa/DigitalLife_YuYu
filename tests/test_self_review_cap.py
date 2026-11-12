@@ -59,7 +59,10 @@ def _tmp_db():
 
 
 async def _run_review(conn, new_core, monkeypatch, new_relation=None):
-    def fake_review(client, old_core, old_relation="", exchanges="", trace_id=""):
+    # 2026-11-12：自省多了 experiences / time_anchor 两个可选参数。
+    # 测试断言不关心它们，但 fake 的签名得跟上真函数，否则会 TypeError。
+    def fake_review(client, old_core, old_relation="", exchanges="", trace_id="",
+                    experiences="", time_anchor=""):
         return {"new_core": new_core, "new_relation": new_relation}
     monkeypatch.setattr(scheduler.brain, "review_narrative", fake_review)
     await scheduler._self_review(conn, client=None, trace_id="t1")

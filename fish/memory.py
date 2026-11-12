@@ -252,3 +252,48 @@ def recent_events(conn: sqlite3.Connection, limit: int = 2) -> list[sqlite3.Row]
            ORDER BY e.ts DESC, e.id DESC LIMIT ?""",
         (limit,),
     ).fetchall()
+
+
+# ── 自省增量素材（2026-11-12 新增）────────────────────────────────────────
+# 和上面 search() / recent_events() 刻意分开：那两个服务「每轮唤醒」，
+# 这两个只服务「每 N 轮一次的自省」，边界是上次成功自省的时间。
+
+def last_review_ts(conn: sqlite3.Connection) -> str | None:
+    """上一次「成功」自省的时间；从没自省过就返回 None（冷启动）。
+
+    kind='self_review' 才算成功，被闸门拒的记的是 kind='error'——
+    和 prompt.build_messages 里【你是谁】那句「上次自省」是同一套口径。
+    """
+    row = conn.execute(
+        "SELECT ts FROM events WHERE kind='self_review' ORDER BY ts DESC, id DESC LIMIT 1"
+    ).fetchone()
+    return row["ts"] if row else None
+
+
+def her_own_writings(conn: sqlite3.Connection, since_ts: str,
+                     limit: int) -> list[sqlite3.Row]:
+    """上次自省之后她自己写下的 episodic 记忆，时间升序，最多 limit 条。
+
+    为什么排除 tags='小帕'：这个 tag 同时标了两类记录，都不该在这里出现——
+      ① 「[小帕] 小帕说：…」是系统代记的来信，不是她写下的；
+      ② 「[发给小帕] …」确实是她写的，但同一段话已经在全量往来区块里
+         （messages.from_yuyu）出现过，再摆一次就是 prompt.py:212 讲的
+         「同一段文字一轮出现两次，她会把重复当成只记得这么点」。
+    留下的是 [日记]、第二段的「事后心里想」：全是她自己的措辞，
+    不含系统记的事实流水，也不含她读过的 feed 正文。
+
+    初学者注意 LIMIT 的套路：先倒序取「最近 N 条」，再 reversed() 翻回
+    时间升序——直接 ORDER BY ts ASC LIMIT N 拿到的会是最早的 N 条（最旧的）。
+
+    已知边界：messages 超过 REVIEW_RELATION_EXCHANGES 条后，更早的
+    「发给小帕」会同时掉出往来区块和这里。到时候应把往来也改成增量式
+    或调高上限；真库现在 13 条，先不为这个复杂化。
+    """
+    rows = conn.execute(
+        """SELECT ts, content FROM memories
+           WHERE layer = 'episodic' AND ts > ?
+             AND (tags IS NULL OR tags != ?)
+           ORDER BY ts DESC, id DESC LIMIT ?""",
+        (since_ts, config.XIAOPA_MSG_TAG, limit),
+    ).fetchall()
+    return list(reversed(rows))

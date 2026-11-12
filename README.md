@@ -50,11 +50,13 @@ python -m fish.trace 3
 - `content`：模型正式的 JSON 回复
 - `reasoning`：**思考过程**（推理模型才有；若是空字符串说明这个模型不返回思维链）
 - `tokens_in` / `tokens_out` / `duration_ms` / `attempt`
-- `kind`：`decision`（第一段·决策）/ `reaction`（第二段·反应）/ `tool_result`
+- `kind`：`decision`（第一段·决策）/ `reaction`（第二段·反应）/ `review`（自省）/ `tool_result` / `error`
 
 **一次唤醒可能是两段调用**，用同一个 `trace_id`。第二段是「看完结果之后的反应」——
 `memory` 产生在第二段，所以 `reaction` 那行才是她真正记住的东西。
-`python -m fish.trace 3` 会按顺序把两段都打出来。
+自省是第三种调用（`review`），每 10 次 wake 一次，或她自己选 `self_review` 工具时发生；
+它的输入是另一套上下文：旧自我叙事 + 关系叙事 + 往来 + 上次自省以来她自己写下的东西。
+`python -m fish.trace 3` 会按顺序把这几段都打出来。
 
 另外每次工具调用的 `detail`（文章全文等）也会以 `tool_result` 记一行——
 想看「她到底读到了什么」，查这里，而不是 events 表。

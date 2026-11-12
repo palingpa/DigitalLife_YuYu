@@ -78,8 +78,9 @@ def _call_api(client, messages: list[dict], temperature: float,
     - 请求消息原样记录（含重试时追加的修复对话），
       这样「为什么第二次调用是那样」永远查得到。
 
-    kind 只影响轨迹里的标签（decision / reaction），方便按段筛选：
-    一次唤醒最多两段，两段用同一个 trace_id。
+    kind 只影响轨迹里的标签（decision / reaction / review），方便按段筛选：
+    一次唤醒最多两段，两段用同一个 trace_id；自省是独立的第三段制度动作，
+    曾经漏传这个参数，被默认标成 decision，7 次自省全混在真决策里。
     """
     t0 = time.time()
     resp = client.chat.completions.create(
@@ -280,20 +281,25 @@ def _dry_run_decision(messages: list[dict]) -> Decision:
 
 
 def review_narrative(client, old_core: str, old_relation: str = "",
-                     exchanges: str = "", trace_id: str = "") -> dict | None:
+                     exchanges: str = "", trace_id: str = "",
+                     experiences: str = "", time_anchor: str = "") -> dict | None:
     """自省：请求重写自我叙事 + 关系叙事。
 
     返回 {"new_core": str|None, "new_relation": str|None}；解析失败返回 None。
     保留率检查与写入由调用方（scheduler）负责，因为保留率门槛是「制度」，
     不是「能力」——它不该由模型感知。relation 的落库规则也由 scheduler 决定。
+
+    experiences / time_anchor 是 2026-11-12 新增的可选 grounding，见
+    prompt.build_review_messages。带默认值，老调用方不必知道新增了什么。
     """
     if config.DRY_RUN:
         # 空跑模式不自省，原样回传当前两版（不会落库，scheduler 不写）
         return {"new_core": old_core, "new_relation": old_relation or ""}
     reply = _call_api(
         client,
-        prompt.build_review_messages(old_core, old_relation, exchanges),
-        0.7, trace_id,
+        prompt.build_review_messages(old_core, old_relation, exchanges,
+                                     experiences, time_anchor),
+        0.7, trace_id, kind="review",
     )
     try:
         data = json.loads(reply.content)
@@ -374,7 +380,19 @@ def run_self_review(conn: sqlite3.Connection, client, trace_id: str = "") -> dic
     rows = messages.recent_exchanges(conn, limit=config.REVIEW_RELATION_EXCHANGES)
     exchanges = messages.format_exchanges(rows)
 
-    result = review_narrative(client, seed_core, seed_relation, exchanges, trace_id)
+    # 2026-11-12：自省不再只靠「旧文本 + 全量往来」。以最近一次成功自省
+    # 为界，把这一段里她自己写下的东西也摆进去（增量式，不是把主线整包
+    # 搬来）。冷启动没有上次自省 → 增量为空，第一次自省照旧。
+    # 定时路径与 self_review 工具都走这里，所以两条路的素材天然一致。
+    since = memory.last_review_ts(conn)
+    now = util.now()
+    writings = (memory.her_own_writings(conn, since, config.REVIEW_EXPERIENCE_MAX)
+                if since else [])
+    experiences = prompt.format_experiences(writings, now)
+    time_anchor = prompt.review_time_anchor(since, now)
+
+    result = review_narrative(client, seed_core, seed_relation, exchanges, trace_id,
+                              experiences=experiences, time_anchor=time_anchor)
     if not result:
         return {"summary": "自省失败：模型没返回有效结果", "new_core": None}
     new_core = result.get("new_core")

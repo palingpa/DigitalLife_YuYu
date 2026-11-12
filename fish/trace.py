@@ -114,8 +114,12 @@ def _main() -> None:
     for rec in tail(n):
         print("=" * 70)
         print(f"[{rec['ts']}] {rec['kind']}  trace={rec.get('trace_id')}")
-        if rec["kind"] in ("decision", "reaction"):
-            label = "第一段 决策" if rec["kind"] == "decision" else "第二段 反应"
+        # review 也走这个分支：它同样是「一次带完整 messages 的 LLM 调用」。
+        # 以前漏了，命令行查看器只把它当杂项打印 400 字截断的 JSON，
+        # 自省到底看见了什么根本看不出来。
+        if rec["kind"] in ("decision", "reaction", "review"):
+            label = {"decision": "第一段 决策", "reaction": "第二段 反应",
+                     "review": "自省"}[rec["kind"]]
             print(f"  {label}")
             print(f"  模型 {rec.get('model')}  温度 {rec.get('temperature')}  第 {rec.get('attempt')} 次")
             print(f"  token: 入 {rec.get('tokens_in')} / 出 {rec.get('tokens_out')}  耗时 {rec.get('duration_ms')}ms")

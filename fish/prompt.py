@@ -308,21 +308,60 @@ REVIEW_CONTRACT = """现在要做一次自省：重写你的「你是谁」。
 - 输出 JSON：{"new_core": "重写后的自我叙事", "new_relation": "你的人际关系变化（无变化可留空）", "reason": "为什么这么改"}"""
 
 
+def format_experiences(rows: list, now) -> str:
+    """把「上次自省以来她自己写下的」渲染成纯文本，供自省输入使用。
+
+    条目格式照抄【想起来的事】（相对时间 + 正文），不新造措辞。
+    刻意不截断：这些本来就是她自己浓缩过的一两句话，再砍就是双重浓缩。
+    prompt.py:216 记过一次教训——她发现「自己的记忆被截断了」，接着
+    推断出「不需要检索」，截断不只丢信息，还污染她对自己记得什么的判断。
+    """
+    return "\n".join(f"- {_relative_time(r['ts'], now)}：{r['content']}" for r in rows)
+
+
+def review_time_anchor(since_ts: str | None, now) -> str:
+    """自省的时间锚点：现在几点、距上次自省多久。
+
+    旧版自省连时间都没有，于是分不清喂给它的往来是新是旧（那 13 条从
+    11-10 起就没变过，每次自省都当新材料重读一遍）。
+    两个标签来自 config，属注入鱼鱼的自然语言，【小帕定稿】，现在是占位；
+    时间数值由代码拼。冷启动时没有「上次」，就不渲染第二行，避免拼出 None。
+    """
+    lines = [f"{config.REVIEW_NOW_LABEL}{now.strftime('%Y-%m-%d %H:%M')}"]
+    if since_ts:
+        lines.append(f"{config.REVIEW_SINCE_LABEL}{_relative_time(since_ts, now)}")
+    return "\n".join(lines)
+
+
 def build_review_messages(old_core: str,
                           old_relation: str | None = None,
-                          exchanges: str = "") -> list[dict]:
+                          exchanges: str = "",
+                          experiences: str = "",
+                          time_anchor: str = "") -> list[dict]:
     """拼自省用的 messages。
 
     old_relation / exchanges 都是可选的 grounding：
     - old_relation：上一版关系叙事（没有就不给，模型从空起）。
     - exchanges：近期真实往来文本（messages 表），让她据此归纳，而非凭空编。
+
+    experiences / time_anchor 是 2026-11-12 新增的可选输入，见上面两个函数。
+    都带默认值——这样老调用方和测试里的 fake 不必知道新增了什么。
+
+    位置：时间锚点放最前（只是数据，不是指令）；增量经历放在往来之后、
+    「重写它」之前，作为最靠近指令的一块新素材。反过来把经历放最前面，
+    按本文件开头「越靠后越被当真」的规律，反而会让这段新东西权重最低。
     """
-    user = f"【你现在的自我叙事】\n{old_core}\n"
+    user = ""
+    if time_anchor.strip():
+        user += f"{time_anchor}\n\n"
+    user += f"【你现在的自我叙事】\n{old_core}\n"
     if old_relation:
         user += f"\n【你对自己人际关系的认识（上一版）】\n{old_relation}\n"
     if exchanges.strip():
         user += (f"\n【近期你和小帕之间的往来，仅供参考，不是要你复述】\n"
                  f"{exchanges}\n")
+    if experiences.strip():
+        user += f"\n{config.REVIEW_EXPERIENCES_LABEL}\n{experiences}\n"
     user += "\n重写它。用 JSON 回复。"
     return [
         {"role": "system", "content": PERSONA + "\n\n" + REVIEW_CONTRACT},
