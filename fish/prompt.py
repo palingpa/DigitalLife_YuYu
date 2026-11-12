@@ -358,11 +358,11 @@ def build_review_messages(old_core: str,
     if old_relation:
         user += f"\n【你对自己人际关系的认识（上一版）】\n{old_relation}\n"
     if exchanges.strip():
-        user += (f"\n【近期你和小帕之间的往来，仅供参考，不是要你复述】\n"
+        user += (f"\n【近期你和小帕之间的往来】\n"
                  f"{exchanges}\n")
     if experiences.strip():
         user += f"\n{config.REVIEW_EXPERIENCES_LABEL}\n{experiences}\n"
-    user += "\n重写它。用 JSON 回复。"
+    user += "\n按你的需求修改，用 JSON 回复。"
     return [
         {"role": "system", "content": PERSONA + "\n\n" + REVIEW_CONTRACT},
         {"role": "user", "content": user},

@@ -299,9 +299,7 @@ ALL_TOOLS = [
     Tool("recall", "检索自己的记忆或日记", _run_recall),
     Tool("web_search", "联网搜索", _run_web_search),
     Tool("send_message", "给小帕发一条消息", _run_send_message),
-    Tool("self_review", "改动一次【你是谁】/【你认识的人】", _run_self_review),
-    # idle：主动休息（状态层已移除，休息不再有「回能」含义，纯粹是叙事上的
-    # 主动性标记）。无参数。desc 是注入鱼鱼的提示词，【小帕定稿】。
+    Tool("self_review", "进行一次自省", _run_self_review),
     Tool("idle", "空转一轮，休息", _run_idle),
 ]
 

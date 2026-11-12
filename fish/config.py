@@ -124,9 +124,9 @@ REVIEW_RELATION_EXCHANGES = 20
 REVIEW_EXPERIENCE_MAX = 12
 # 下面三个标签会拼进自省 prompt，属于注入鱼鱼的自然语言，【小帕定稿】。
 # 刻意留一眼可辨的占位：素材本身从重启起就会真的进自省，只是区块头不好看。
-REVIEW_NOW_LABEL = "{占位：自省现在时间标签，待小帕定稿}"
-REVIEW_SINCE_LABEL = "{占位：自省距上次自省标签，待小帕定稿}"
-REVIEW_EXPERIENCES_LABEL = "{占位：自省增量经历区块标签，待小帕定稿}"
+REVIEW_NOW_LABEL = "现在时间："
+REVIEW_SINCE_LABEL = "\n上一次自省的时间："
+REVIEW_EXPERIENCES_LABEL = "【你最近的记忆】"
 
 # ── 世界输入（Design_v0.2 §13.2）───────────────────────────────────────
 FEED_INTERVAL_MIN = 120    # 每 2 小时抓一次信息源
