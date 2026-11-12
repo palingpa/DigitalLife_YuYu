@@ -5,6 +5,21 @@
 > ## [YYYY-MM-DD HH:MM] 谁 · 一句话改动
 > **为什么**：……（没有为什么的改动不值得记）
 
+## [2026-11-12 14:10] Kite · 新增 M0 工作记忆：给之后醒来的自己留话（两段可写 + 3 轮 TTL 硬兜底）
+**为什么**：真机轨迹里 58 次 `decision` 有 16 次 reasoning 提到「下次」、13 次是明确的分轮打算（如「选择：send_message 给小帕。然后下次醒来再决定要不要重写」），但 `reasoning` 只进 `logs/traces` 不进 prompt，`why` 只记本轮理由，【最近在做的事】只回看已做成的事实——三层记忆全在回答「发生过什么」，这些跨轮意图 100% 丢失。小帕拍板：两段都可写、独立单条槽、PERSONA 不动、文案先留 `{占位}` 跑通链路。
+**改了什么**：
+- `db.py`：新增 `working_note` 单条槽表（id 恒为 1、remaining_wakes、born_event_id）；`events` 加 `note_for_next` 列存每轮历史（append），`_migrate` 补列。真实库下次启动自动迁移，本次未手动碰 `data/fish.db`。
+- `memory.py`：`get/set/clear/settle_working_note` + `_tick`。三态结算：不写=沿用并 -1、写空=立即清、写新=覆盖并重置 TTL。与 `memories` 物理隔离，不进检索/打分/自省。
+- `brain.py`：`Decision`/`Reaction` 加 `note_for_next`；新增 `normalize_note`（非字符串/超长一律丢弃，**不截断**：截断会留半句话）与 `resolve_note`（第二段优先）；`_clamp_decision` 加第三道闸；DRY_RUN 轨迹记新字段。
+- `prompt.py`：`CONTRACT` / `REACTION_CONTRACT` 各留一处 `{占位}` 字段说明；`build_messages` 在【最近在做的事】之后、`【世界】`之前渲染 `config.WORKING_NOTE_LABEL` 区块（不显示剩余轮数，避免倒计时诱导赶进度）。**PERSONA 一字未动**。
+- `scheduler.py`：`wake()` 在 events INSERT 前合并两段（解析失败那段整段丢弃），INSERT 落三态，写完 events 后每轮恰好结算一次。DRY_RUN 短路在更前面，天然零副作用。**「轮」= 一次 `wake()` 调用**，不用 `db.wake_count`（它是 `COUNT(*) FROM events`，会把 self_review/error 旁支算进去；真库 64 条里 9 条是旁支）。
+- `config.py`：`WORKING_NOTE_TTL=3` / `WORKING_NOTE_MAX_CHARS=200` / `WORKING_NOTE_LABEL`（占位）。TTL 做成常量，未来连续作业要更长时按任务分档，不写死在逻辑里。
+- 测试：新增 `tests/test_working_note.py` 20 例（三态、第二段优先、解析失败回落、超长拒写、TTL 三轮归零、改写重置、旁支不消耗轮次、DRY_RUN 零副作用、上下文读回、老库迁移、降级路径）；全仓 **92/92 绿**（原 72 + 20）。
+- **顺手修既有 bug**：`brain._parse_decision` 的 JSON 解析失败分支、以及 `decide()` 两次都失败的降级分支，构造 `Decision` 时**漏了必填的 `tool`**，会抛 TypeError 而不是按设计「降温重试 / 强制空转」。新测试照出来的，两处补 `tool=None`，并加 `test_two_bad_replies_degrade_to_empty_wake` 守住。这是 I2 等价纪律的核心路径，之前一直没被测试覆盖。
+- 文档同步：`Design_v0.3.md`（§1 I1 补注、§3.1 DDL、§5.1、§5.5 M0 全规格、§7.1 加 [6a]、§7.3 三态、§10 五指标→六指标、§11 排期、§13 决策 8）、`PROJECT.md`、`ARCHITECTURE.md`、`TESTING.md`、`README.md`。
+**红线**：三处注入鱼鱼的自然语言全是 `{占位}`，Kite 未代笔任何文案；占位刻意不含语义引导，因此**真机鱼鱼暂时不会主动输出 `note_for_next`**——代码链路已由测试跑通，等小帕定稿措辞后才会在真机生效。测试只锁字段名与读回行为，不锁文案（用 config 常量断言，她改措辞测试不会红）。所有测试占位文本用 `{...}` 花括号，一眼可辨为占位。
+**验证**：`pytest 92/92`；在 `data/fish.db` 的**副本**上跑 `db.connect()`，确认 `note_for_next` 列与 `working_note` 表自动补齐、events/memories 行数不变（副本只含主库内容 59/58，未复制 WAL，仅验结构）。真库与 WAL 均未改动。
+
 ## [2026-11-12 02:38] Kite · 新建 Design_v0.3.md 为新基线，同步三份文档指向 v0.3
 **为什么**：状态层已于本日（commit dd090a7）整体删除，Design_v0.2 关于状态层的章节全部失效，但 PROJECT/ARCHITECTURE/README 仍把它当设计文档指针、且工具清单停留在旧版（5 件事、缺 send_message / self_review）。用户要求维护说明文档并据现状新拟 v0.3。
 **改了什么**：

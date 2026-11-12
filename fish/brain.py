@@ -26,6 +26,9 @@ class Decision:
     tool: str | None
     args: dict = field(default_factory=dict)
     why: str = ""
+    # 工作记忆：留给下一次醒来的自己的提示。三态见 normalize_note，
+    # None 才是「这轮没写」，空字符串是「明确不留了」，两者不能混。
+    note_for_next: str | None = None
     next_wake_in_min: int = 30   # 默认值：模型没给时的兜底
     raw: str = ""
     parse_ok: bool = True
@@ -41,6 +44,7 @@ class Reaction:
     合成一个类，就会重蹈「还没看到内容就已经写完记忆」的覆辙。
     """
     memory: str = ""
+    note_for_next: str | None = None       # 第二段也能写/改/清提示，且优先于第一段
     next_wake_in_min: int | None = None    # None = 不改，沿用第一段定的
     raw: str = ""
     parse_ok: bool = True
@@ -102,16 +106,47 @@ def _call_api(client, messages: list[dict], temperature: float,
                     (usage.prompt_tokens, usage.completion_tokens), duration)
 
 
+def normalize_note(raw) -> str | None:
+    """模型给的 note 字段 → 可信的三态值。
+
+      None  = 这轮没写（含字段缺失、类型不对、超长被拒）
+      ""    = 明确不留了
+      文本  = 新提示
+
+    这是 I2 等价纪律的直接执行点：模型原始输出不算数。非字符串或超长
+    一律当「没写」，绝不把坏输出往下传，也绝不「沿用上次的结果」。
+    超长选择拒绝而不是截断：截断会留下半句话，她下次读到会以为自己
+    当初就写了半句（RECENT_FACT_CHARS 那次截断污染自我判断的教训）。
+    """
+    if raw is None or not isinstance(raw, str):
+        return None
+    value = raw.strip()
+    if len(value) > config.WORKING_NOTE_MAX_CHARS:
+        return None
+    return value
+
+
+def resolve_note(first: str | None, second: str | None) -> str | None:
+    """合并两段写的提示：第二段（看完结果之后）优先。
+
+    second 为 None 才回落到第一段——注意空字符串是「明确不留」，属于写了，
+    会盖掉第一段留下的文本。调用方负责在解析失败时把那一段传成 None。
+    """
+    return first if second is None else second
+
+
 def _clamp_decision(d: Decision) -> Decision:
     """模型输出 → 能安全生效的决策。
 
-    两道闸门：
+    三道闸门：
     1. 没选工具时，把 action/tool 归一化成空转
     2. next_wake_in_min 钳进 [10, 180]
+    3. note_for_next 过 normalize_note（新字段统一在这个入口校验）
     """
     if d.action != "tool" or not d.tool:
         d.action, d.tool = "none", None
     d.next_wake_in_min = max(config.WAKE_MIN_GAP, min(config.WAKE_MAX_GAP, d.next_wake_in_min))
+    d.note_for_next = normalize_note(d.note_for_next)
     return d
 
 
@@ -119,7 +154,10 @@ def _parse_decision(reply: ApiReply) -> Decision:
     try:
         obj = json.loads(reply.content)
     except json.JSONDecodeError:
-        return Decision(action="none", why="（没说清楚）", raw=reply.content,
+        # tool 是必填字段（没有默认值），降级分支也必须显式给 None：
+        # 少了它这里会抛 TypeError，坏 JSON 就走不到「降温重试」而是直接崩，
+        # 2026-11-12 新增工作记忆测试时才把这个既有的坑照出来。
+        return Decision(action="none", tool=None, why="（没说清楚）", raw=reply.content,
                         parse_ok=False, tokens=reply.tokens)
 
     d = Decision(
@@ -127,6 +165,8 @@ def _parse_decision(reply: ApiReply) -> Decision:
         tool=obj.get("tool"),
         args=obj.get("args") if isinstance(obj.get("args"), dict) else {},
         why=str(obj.get("why", ""))[:200],
+        # 原值先塞进来，统一由 _clamp_decision 过 normalize_note 校验。
+        note_for_next=obj.get("note_for_next"),
         next_wake_in_min=_to_int(obj.get("next_wake_in_min"), 30),
         raw=reply.content,
         tokens=reply.tokens,
@@ -161,7 +201,7 @@ def decide(client, messages: list[dict], trace_id: str = "") -> Decision:
     if d2.parse_ok:
         return d2
 
-    return Decision(action="none", why="（两次都没能给出有效回复）",
+    return Decision(action="none", tool=None, why="（两次都没能给出有效回复）",
                     parse_ok=False, raw=reply2.content,
                     tokens=(reply.tokens[0] + reply2.tokens[0],
                             reply.tokens[1] + reply2.tokens[1]))
@@ -182,6 +222,8 @@ def _parse_reaction(reply: ApiReply) -> Reaction:
                   min(config.WAKE_MAX_GAP, _to_int(obj.get("next_wake_in_min"), 0)))
     return Reaction(
         memory=str(obj.get("memory") or "").strip(),
+        # Reaction 没有 _clamp_decision 那样的统一入口，所以在解析处直接校验。
+        note_for_next=normalize_note(obj.get("note_for_next")),
         next_wake_in_min=nxt,
         raw=reply.content,
         tokens=reply.tokens,

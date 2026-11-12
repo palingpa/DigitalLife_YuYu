@@ -39,7 +39,8 @@ CONTRACT = """你的回复必须是一个 JSON 对象，字段如下：
   "next_wake_in_min": 10到180之间的整数,
 }
 注意：
-next_wake_in_min 是你决定自己想在多少分钟后再次醒来,""".replace("__TOOLS__", _TOOL_ENUM)
+next_wake_in_min 是你决定自己想在多少分钟后再次醒来,
+{占位：note_for_next 字段说明，待小帕定稿}""".replace("__TOOLS__", _TOOL_ENUM)
 
 
 # 第二段：做完之后，看着结果自评。这一段才是真正产生记忆的地方。
@@ -59,7 +60,13 @@ REACTION_CONTRACT = """你刚做了一件事，现在看到了结果。
   "next_wake_in_min": 10到180之间的整数（可选，不写就沿用原来的）
 }
 注意：
-- memory 会进长期记忆，下次醒来会原样读回给你，只写你真正想留住的"""
+- memory 会进长期记忆，下次醒来会原样读回给你，只写你真正想留住的
+- {占位：note_for_next 字段说明，待小帕定稿}"""
+
+# 上面两处占位由小帕分别定稿（分工红线，Kite 不代笔）。第二处措辞需要额外
+# 说明「这一段也能写/改/清提示，写了会覆盖第一段」——语义由 brain.resolve_note
+# 保证，但必须写进契约她才知道自己有这个能力（项目一贯原则：希望模型主动
+# 使用的东西，必须在提示词里写明名字与触发时机）。
 
 
 def _relative_time(ts: str, now) -> str:
@@ -160,6 +167,16 @@ def build_messages(conn: sqlite3.Connection,
                 shown_ids.add(r["reflection_id"])
             lines.append(line)
         user_parts.append("【最近在做的事】\n" + "\n".join(lines) + "\n")
+
+    # ── 工作记忆：上一次醒来的自己留给这一轮的话 ──────────────────────
+    # 位置刻意放在【最近在做的事】之后、更靠后的【世界】之前：本文件开头说了
+    # 「越靠后越被当真」，塞到末尾会被她读成「系统派的任务」，而 PERSONA 明写
+    # 「没有任何任务要求你完成」。这里只是她自己写下的记录，不是待办清单。
+    # 不显示剩余轮数：显示倒计时会诱导她赶进度，干扰「自行决定要不要遵守」。
+    # DRY_RUN 下也照常渲染（只读不写库），空跑时能看清这个区块长什么样。
+    wnote = memory.get_working_note(conn)
+    if wnote:
+        user_parts.append(f"{config.WORKING_NOTE_LABEL}\n{wnote['content']}\n")
 
     # ── 小帕来信（仅「有未读 to_yuyu」那一轮渲染，绝不常驻）──
     # 设计红线：常驻会过度强化「小帕」的存在感，抬高鱼鱼主动给她发消息的概率，

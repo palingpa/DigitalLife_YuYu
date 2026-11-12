@@ -63,6 +63,67 @@ def bump_recall(conn: sqlite3.Connection, ids: list[int]) -> None:
     conn.commit()
 
 
+# ── 工作记忆：单条槽（Design_v0.3 §5.5 M0）────────────────────────────────
+# 与上面三层刻意分开：memories 存「发生过的事」，这里存「接下来打算做什么」。
+# 所以它不进检索、不进打分、不进自省素材，也不受 I1（heartbeat 不写 memories
+# 表）约束——空转轮恰恰是最需要给下一轮留话的时候（「这轮先歇，下次再做 X」）。
+#
+# 初学者注意「单条覆盖」这个套路：表里永远只有 id=1 一行，写入时先 DELETE
+# 再 INSERT。和 save_narrative 是同一个写法，比 UPDATE ... ON CONFLICT 更好读。
+
+def get_working_note(conn: sqlite3.Connection) -> sqlite3.Row | None:
+    """当前留给下一次醒来的自己的提示；没有（或已被 TTL 杀掉）就返回 None。"""
+    return conn.execute("SELECT * FROM working_note WHERE id = 1").fetchone()
+
+
+def set_working_note(conn: sqlite3.Connection, content: str,
+                     born_event_id: int | None = None) -> None:
+    """写一条新提示，覆盖旧的，并把存活计数重置为 TTL。"""
+    ts = util.now_iso()
+    conn.execute("DELETE FROM working_note WHERE id = 1")
+    conn.execute(
+        """INSERT INTO working_note
+           (id, content, remaining_wakes, created_at, updated_at, born_event_id)
+           VALUES (1, ?, ?, ?, ?, ?)""",
+        (content, config.WORKING_NOTE_TTL, ts, ts, born_event_id),
+    )
+    conn.commit()
+
+
+def _tick_working_note(conn: sqlite3.Connection) -> None:
+    """这轮没写新提示：沿用旧的，存活计数 -1；归零就自动删掉。"""
+    conn.execute(
+        "UPDATE working_note SET remaining_wakes = remaining_wakes - 1, "
+        "updated_at = ? WHERE id = 1",
+        (util.now_iso(),),
+    )
+    conn.execute("DELETE FROM working_note WHERE id = 1 AND remaining_wakes <= 0")
+    conn.commit()
+
+
+def clear_working_note(conn: sqlite3.Connection) -> None:
+    """她明确说「不留了」：立刻清掉，不等 TTL。"""
+    conn.execute("DELETE FROM working_note WHERE id = 1")
+    conn.commit()
+
+
+def settle_working_note(conn: sqlite3.Connection, note: str | None,
+                        born_event_id: int | None = None) -> None:
+    """一次 wake 结束时结算工作记忆（由 scheduler 调用，每轮恰好一次）。
+
+    note 是**已经过 brain 校验**的三态值，不是模型原始输出（I2 等价纪律）：
+      None  = 这轮没写  → 沿用旧提示并扣一轮存活
+      ""    = 显式不留  → 立刻清掉
+      文本  = 新提示    → 覆盖并把存活重置回 TTL
+    """
+    if note is None:
+        _tick_working_note(conn)
+    elif note == "":
+        clear_working_note(conn)
+    else:
+        set_working_note(conn, note, born_event_id)
+
+
 # ── 检索 ─────────────────────────────────────────────────────────────────
 
 def _recency(ts: str, now) -> float:

@@ -33,6 +33,9 @@ sqlite3 data/fish.db "SELECT ts, kind, tool, why FROM events ORDER BY id DESC LI
 # 记忆层观察（状态层已移除，不再有心情数值；看她"记住了什么"）
 sqlite3 data/fish.db "SELECT ts, layer, substr(content,1,40) FROM memories ORDER BY id DESC LIMIT 20"
 
+# 工作记忆：她给下一轮的自己留了什么话（NULL=没写，空串=不留）
+sqlite3 data/fish.db "SELECT ts, tool, why, note_for_next FROM events WHERE note_for_next IS NOT NULL ORDER BY id DESC LIMIT 20"
+
 # 最近一次调用的完整输入/输出/思考过程（最有用）
 python -m fish.trace 3
 ```
@@ -88,7 +91,7 @@ Ctrl+C 停止。状态、记忆、日志全部实时落库（SQLite WAL），重
 fish/
   config.py      所有魔法数字
   db.py          SQLite + DDL + 老库迁移
-  memory.py      记忆：三层存储 + 打分检索
+  memory.py      记忆：三层存储 + 打分检索 + 工作记忆单条槽
   prompt.py      一次 wake 的上下文组装
   brain.py       DeepSeek 调用 + 解析 + 降级 + 写轨迹
   trace.py       调用轨迹的写入与查看（python -m fish.trace）

@@ -31,7 +31,7 @@
 
 **四条不变量**（任何时候都必须成立）：
 
-- **I1**：heartbeat / idle 永不写入 `memories` 表。记忆里只允许存在真实发生过、或她主动表达过的事。执行点在 `scheduler.wake()` 末尾：`if kind == "event" and memory_text`（`fish/scheduler.py:221`）。
+- **I1**：heartbeat / idle 永不写入 `memories` 表。记忆里只允许存在真实发生过、或她主动表达过的事。执行点在 `scheduler.wake()` 末尾：`if kind == "event" and memory_text`。**M0 补注**：I1 管的是 `memories` 表；`working_note` 存的是「接下来打算做什么」而非「发生过什么」，不受此限——空转轮恰恰最需要给下一轮留话（「这轮先歇，下次做 X」）。
 - **I2**（状态层移除后退役，等价纪律）：原意"模型输出不直接成为状态值"；现等价纪律为"**模型原始输出须经解析校验（`parse_ok`）才往下传，解析失败绝不沿用上次结果**"。执行点 `brain._parse_*` / `_clamp_decision`（`fish/brain.py:105` 起）。这杜绝了"卡在循环里"的死东西。
 - **I3**：同一时刻只允许一个 wake 在跑（单飞锁）。两层：**进程级** `fish/lock.py`（`data/fish.lock` 的 OS 字节锁，`main.py` 第一行抢，第二个进程直接拒启）；**进程内** `scheduler.run` 的 `wake_lock`（`asyncio.Lock`）。
 - **I4**（本版明确定名）：**记忆只产生于"看到结果之后"或"显式表达"**。即第二段反应、写日记、通信、自省四类；空转/失败/工具无正文都不产生记忆。这是 I1 的正向表述，也是两段式架构的直接推论（`fish/prompt.py:REACTION_CONTRACT` 注释）。
@@ -62,7 +62,7 @@ DigitalLife_YuYu/
 ├── fish/
 │   ├── config.py              # 全部魔法数字集中在这里，每项注明 §号
 │   ├── db.py                  # 连接、建表、旧库迁移（含状态层清理）
-│   ├── memory.py              # 三层写入 / 检索 / 打分 / 自省辅助
+│   ├── memory.py              # 三层写入 / 检索 / 打分 / 自省辅助 + 工作记忆单条槽
 │   ├── prompt.py              # 上下文组装（persona + 三份契约）
 │   ├── brain.py               # API 调用 / 解析 / 降级 / 自省闸门
 │   ├── scheduler.py           # tick / 唤醒判断 / 单飞锁 / 自省触发
@@ -90,6 +90,7 @@ CREATE TABLE IF NOT EXISTS events (
   args_json      TEXT,
   result_summary TEXT,                          -- 给下轮【最近在做的事】用的 1–2 句事实
   why            TEXT    NOT NULL,              -- 模型自述理由，原样保存（第三层"真相"原材料）
+  note_for_next  TEXT,                          -- M0：本轮留给下轮的提示（NULL=没写 / ""=不留 / 文本=新提示）
   next_wake_at   TEXT,                          -- 闹钟：决定下次醒的时间（完全由鱼鱼自定）
   tokens_in      INTEGER DEFAULT 0,
   tokens_out     INTEGER DEFAULT 0,
@@ -113,6 +114,17 @@ CREATE TABLE IF NOT EXISTS memories (
   pinned           INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_mem_layer ON memories(layer, ts DESC);
+
+-- M0 工作记忆：单条槽（id 恒为 1），存「接下来打算做什么」而不是「发生过什么」。
+-- 与 memories 物理隔离：不进检索、不进打分、不进自省素材。
+CREATE TABLE IF NOT EXISTS working_note (
+  id               INTEGER PRIMARY KEY CHECK (id = 1),
+  content          TEXT    NOT NULL,
+  remaining_wakes  INTEGER NOT NULL,            -- 每轮结算 -1，归零即删
+  created_at       TEXT    NOT NULL,
+  updated_at       TEXT    NOT NULL,
+  born_event_id    INTEGER REFERENCES events(id)  -- 哪一轮写下的，便于回溯
+);
 
 CREATE TABLE IF NOT EXISTS inbox (
   id       INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -174,6 +186,8 @@ v0.2 的 §4（energy/valence/boredom 动力学）、§6.1 路径 B（boredom �
 
 常驻的两层是"她稳定的人格"，episodic 是"她经历过的流水"。连续性完全来自这三层被读回给她（`prompt.build_messages`）。
 
+**三层之外还有一块工作记忆**（§5.5 M0）：`working_note` 单条槽，存「我接下来打算做什么」。它不属于 `memories` 表，不参与检索打分、不进自省素材，但**每轮常驻上下文**、最多存活 3 轮。之所以单列：这三层全在回答「发生过什么」，唯独没有地方放「还没做的事」——而她的 `reasoning` 里反复出现分轮打算（实测 58 次 decision 中 16 次提到「下次」、13 次是明确的分轮打算），推理过程只进 traces 不进 prompt，这些打算此前 100% 丢失。
+
 ### 5.2 写入路径（当前，= "记忆何时产生"）
 
 | 来源 | 代码位置 | 落点 | 备注 |
@@ -216,11 +230,41 @@ if retained < SELF_REVIEW_MIN_RETENTION(0.6): reject()     # 保留旧版，记 
 
 另加长度双闸：`SELF_REVIEW_TARGET_MAX=600`（软目标，只给提示词当方向）、`SELF_REVIEW_HARD_MAX=1200`（硬上限，超了拒写）。relation 层 v1 无闸门，非空即落库，素材来自 `messages` 表近期往来（`REVIEW_RELATION_EXCHANGES=20`，grounding 防凭空编）。冷启动不设闸门。
 
-### ★ 5.5 v0.3 记忆层改进（本版主线，待小帕敲定设计思路）
+### ★ 5.5 v0.3 记忆层改进（本版主线）
 
-> 目标：
-> 顺序：
+> **目标**：让记忆层不只「记、想、忘、长」，还能**托住跨轮的意图**。
+> **顺序**：M0 工作记忆（已落地）→ M1 复用强化 → M2 自动主题标签 → M3 睡眠整理 → M4 可选本地语义检索 → M5 记忆健康观测。排期见 §11。
 > 每个包都标注"是否触碰红线"——**凡涉及注入鱼鱼的自然语言（契约字段、自省/整理指令措辞），一律归小帕定稿，Kite 只提方案与位置，不代笔。**
+
+#### M0 工作记忆（2026-11-12 落地：代码已通、文案待定稿）
+
+**要解的问题**：她的 `reasoning` 里常出现「这轮先做 A，下次做 B」，但推理过程只写进 `logs/traces`，`why` 只记本轮理由，【最近在做的事】只回看已做成的事实——下一轮的自己完全不知道上轮定过什么。实测 58 次 `decision` 里 16 次提到「下次」、13 次是明确的分轮打算，此前 100% 丢失。
+
+**形态选择（三个否决）**：
+
+- 否决「做成新工具」：`scheduler.wake()` 一次只 dispatch 一个工具，写提示就得牺牲本轮动作。
+- 否决「只在第二段写」：实测第二段覆盖率仅 66%（58 次 decision / 38 次 reaction），空转 / idle / write_journal / send_message / self_review 共 20 轮没有第二段，那 1/3 既不能改也不能清自己的安排。
+- 否决「塞进 `memories` 加一层」：`layer` CHECK、检索扫描最近 500 条、`save_narrative` 断言、I1/I4 判据都会被短期提示污染。语义上它也不是记忆。
+
+**落地形态**：独立单条槽 `working_note`（id 恒为 1）+ 决策 JSON 里的可选字段 `note_for_next`。两段都可写，**第二段优先**（`brain.resolve_note`）。
+
+| 三态 | 含义 | 结算动作（`memory.settle_working_note`） |
+|---|---|---|
+| 字段缺失 / `null` | 这轮没写 | 沿用旧提示，`remaining_wakes - 1`，归零删除 |
+| `""` | 明确不留了 | 立即清除 |
+| 文本 | 新提示 | 覆盖，计数重置为 `WORKING_NOTE_TTL = 3` |
+
+**硬软两层兜底**：软约束「最多给自己安排 3 轮」只能进契约，模型不会可靠遵守（`why` 说好 40 字、core 说好 600 字，最后都靠代码钳制）；硬约束由代码保证：①存活计数 3→0 自动删；②长度超 `WORKING_NOTE_MAX_CHARS = 200` **拒绝写入**（不截断，截断会留下半句话）；③解析失败的那一段一律丢弃，绝不沿用坏输出（I2 等价纪律）。**「轮」= 一次 `wake()` 调用**，不用 `db.wake_count`（它是 `COUNT(*) FROM events`，会把 self_review / error 旁支算进去；真库 64 条里 9 条是旁支）。
+
+**结算点**：`scheduler.wake()` 写完 `events` 之后、`conn.commit()` 之前，每轮恰好一次。DRY_RUN 短路在更前面，空跑天然零副作用。不在 `build_messages` 里递减——那边是「读」，还带着 dry_run 分支，职责会糊。
+
+**观测**：`events.note_for_next` 每轮原样落库（append 历史），`working_note` 只存当前有效值（单条覆盖）。两者分开，才看得到「她给自己安排了什么 / 后来有没有照做」，对应 §10.2 ⑥。
+
+**上下文位置**：放在【最近在做的事】之后、【世界】之前。不放末尾是因为 §7.1 的「作用力从弱到强」——塞到最后会被读成系统派的任务，而 PERSONA 明写「没有任何任务要求你完成」。不显示剩余轮数，避免倒计时诱导她赶进度。
+
+**红线状态**：`CONTRACT` / `REACTION_CONTRACT` 里的字段说明、`config.WORKING_NOTE_LABEL` 三处目前都是**一眼可辨的 `{占位}`**，由小帕定稿。占位不含语义引导，因此**真机鱼鱼暂时不会主动输出该字段**；代码链路已由 `tests/test_working_note.py` 跑通，换上正式措辞后她才会开始使用。PERSONA 按小帕决定不动。
+
+> **复用给未来的连续作业**：v1 存纯文本，读写只经 `memory.get/set/settle_working_note`，未来要换成结构化 steps / 进度，只改存储编码，`prompt` 与 `scheduler` 一行不用动。`WORKING_NOTE_TTL` 是 config 常量而非硬编码，长任务需要更多轮时按任务类型分档即可。
 
 ---
 
@@ -262,12 +306,14 @@ next_wake_in_min = clamp(model.next_wake_in_min, WAKE_MIN_GAP=10, WAKE_MAX_GAP=1
 [4] user     : 【你是谁】core + 【上次自省时间】
 [5] user     : 【你认识的人】relation
 [6] user     : 【最近在做的事】最近 N 次唤醒事实 + 事后想法
+[6a] user    : 【给之后醒来的你】工作记忆提示（M0；仅当 working_note 存在）
 [7] user     : 【小帕】仅"有未读来信"那轮渲染、且渲染即 seen
 [8] user     : 【想起来的事】检索到的情景记忆（top 5，带"x小时前"）
 [9] user     : 【你现在能做的事】工具清单
 [10] user    : 【世界】inbox 未读数与前几条标题（只给标题不给全文）
 ```
-> 注意：**不再有 v0.2 第 4 项的"身体感受 felt_text"**（状态层已删）。连续性的全部主观质感现在来自 [4][6][8] 三块记忆。
+> 注意：**不再有 v0.2 第 4 项的"身体感受 felt_text"**（状态层已删）。连续性的全部主观质感现在来自 [4][6][6a][8]——[6a] 是唯一指向「未来」的一块。
+> [6a] 的位置刻意靠中：越靠后模型越当真，放到 [9][10] 附近会被读成「系统派的任务」，而 PERSONA 明写「没有任何任务要求你完成」。它是她自己写下的记录，不是待办清单；区块头文案由小帕定稿（当前占位）。
 
 ### 7.2 persona（当前 `prompt.PERSONA`）
 刻意留白「你怎么看自己」「你想要什么」——这些应由她在 core 记忆里长出来。第一版写满，后面就没得观察。
@@ -277,13 +323,18 @@ next_wake_in_min = clamp(model.next_wake_in_min, WAKE_MIN_GAP=10, WAKE_MAX_GAP=1
 ```json
 { "action": "tool" | "none", "tool": "... | null",
   "args": {}, "why": "第一人称 ≤40 字（空转也要写）",
+  "note_for_next": "可选（三态，见下）",
   "next_wake_in_min": 10–180 }
 ```
 第二段（做完看到结果后）自评：
 ```json
-{ "memory": "1–2 句你以后会记得的版本", "next_wake_in_min": 10–180（可选） }
+{ "memory": "1–2 句你以后会记得的版本",
+  "note_for_next": "可选，写了会覆盖第一段",
+  "next_wake_in_min": 10–180（可选） }
 ```
-`memory` 只存在于第二段（I1 从"校验后清空"变成"根本不存在"）。判据落在"结果有没有可消化内容"而非"选了哪个工具"（`scheduler.wake:164`），所以写日记/send_message/self_review 这类"反思即动作"的工具被排除出第二段，避免"对反思再做反思"。
+`memory` 只存在于第二段（I1 从"校验后清空"变成"根本不存在"）。判据落在"结果有没有可消化内容"而非"选了哪个工具"（`scheduler.wake` 两段式分叉），所以写日记/send_message/self_review 这类"反思即动作"的工具被排除出第二段，避免"对反思再做反思"。
+
+**`note_for_next` 两段都能写**（M0），因为第二段只覆盖约 2/3 的轮次。三态：`null`/不写 = 沿用旧提示、空串 = 明确不留、文本 = 新提示；**第二段优先**，但第二段解析失败时整段丢弃、回落到第一段。校验在 `brain.normalize_note` / `_clamp_decision`，合并与结算在 `brain.resolve_note` / `memory.settle_working_note`。契约里的两处字段说明与区块标签目前是 `{占位}`，措辞由小帕定稿（红线）；此处只描述代码语义。
 
 ### 7.4 解析与降级（`brain.decide:144`）
 ```
@@ -328,12 +379,12 @@ ALL_TOOLS = [
 
 ---
 
-## 10. 观测层（v0.3 版，记忆健康五指标）
+## 10. 观测层（v0.3 版，记忆健康六指标）
 
 ### 10.1 每次 wake 落库字段
 见 §3.1 `events`。`why` 原样保存——它是第三层"真相"的原材料，清洗了就没了。
 
-### 10.2 一周后该看的五个数（记忆视角，替换失效的心情互信息）
+### 10.2 一周后该看的六个数（记忆视角，替换失效的心情互信息）
 
 **① heartbeat / event 比例** — 沿用。健康 30%–70%。低于 30% 太闲（世界输入少，在饿着）；高于 70% 无聊推太猛、为动而动。
 
@@ -353,6 +404,19 @@ hit_rate = recall_ok / recall_total
 
 **⑤ 自省演化** — 沿用并强化。core 的**保留率**（每次自省 `>0.6` 才接受）与**长度趋势**（软目标 600 / 硬上限 1200）。若 30 天后 core 与第一天几乎一样 → 只是复读机；若剧烈跳变 → 漂移过快（闸门在挡）。M3 后还应看"摘要覆盖了多少老 episodic"。
 
+**⑥ 工作记忆健康** — *M0 新增*。三个能直接算的数：
+
+```sql
+SELECT COUNT(*) AS wakes,
+       SUM(note_for_next IS NOT NULL AND note_for_next != '') AS wrote,
+       SUM(note_for_next = '')                              AS cleared
+FROM events WHERE kind IN ('event','heartbeat');
+```
+
+- **写入率** `wrote / wakes`：长期为 0 = 她根本没发现这个能力（多半是契约措辞没写清，红线区）；长期接近 1 = 可能在自我派活，与 PERSONA「没有任何任务要求你完成」冲突。
+- **结局分布**：`working_note` 最后是被改写、被显式清空、还是被 TTL 自动杀掉。若几乎全靠 TTL 兜底，说明她从不主动收尾，是硬兜底在替她做决定。
+- **真正的「遵守率」**要人工对照 `events.note_for_next` 与下一轮的 `why` / `tool`（`python -m fish.trace 3`），不适合做成自动指标：她有权不遵守，那正是设计意图。
+
 ### 10.3 验收标准
 连续跑满 72 小时不崩，且 ① 落在区间内；`parse_ok=0` 比例 < 5%。崩了不要紧，日志在。
 
@@ -360,6 +424,18 @@ hit_rate = recall_ok / recall_total
 
 ## 11. 改造顺序（v0.3 记忆工作包）
 
+| 包 | 内容 | 状态 | 是否触碰红线 |
+|---|---|---|---|
+| **M0** | 工作记忆：独立单条槽 + 两段可写 + 3 轮 TTL 硬兜底 | ✅ 2026-11-12 代码落地，20 条新测试全绿 | **是**：契约两处字段说明 + 区块标签待小帕定稿，当前 `{占位}` |
+| M1 | 复用强化：让 `recall_count` 真正参与 `search` 打分（现在只记不用） | 待做 | 否（纯打分公式） |
+| M2 | 自动主题标签：写入时给 episodic 打 tags，提升召回命中率 | 待做 | **是**（若新增指令措辞） |
+| M3 | 睡眠整理：复用 self_review 调用做老 episodic 摘要 | 待做 | **是**（整理指令措辞） |
+| M4 | 可选本地语义检索（RTX 5060 8GB 跑 embedding） | 待小帕拍板是否启用、用哪个模型 | 否 |
+| M5 | 记忆健康观测：把 §10.2 六指标做成可跑的统计脚本 | 待做 | 否 |
+
+**为什么 M0 先做**：状态层删除后记忆是连续性的唯一支柱，而三层记忆全在回答「发生过什么」，唯独没有「我接下来打算做什么」。这块空白每天都在丢东西（实测 58 轮里 13 轮有明确分轮打算），且不依赖检索质量、不引新依赖、不增加 API 调用次数（字段搭在既有两段里），是成本最低、观察价值最高的一刀。它同时给未来的连续作业留好了接口（§5.5）。
+
+**开工前必须先补的一步**：M0 的三处 `{占位}` 换上小帕定稿的措辞，真机鱼鱼才会开始输出 `note_for_next`；在那之前代码链路已通，但行为上等于不存在。换文案后建议先 `FISH_DRY_RUN=1` 看一眼 `logs/last_prompt.txt`，再重启真机跑 24–72h 观察 ⑥。
 
 ---
 
@@ -383,3 +459,4 @@ hit_rate = recall_ok / recall_total
 5. **self_review 频率 = 每 10 次 wake**（原 20，初期让自我叙事快长出来，一周后评估）。
 6. **（2026-11-12 新增）状态层整体删除**，记忆层升格为唯一支柱，v0.3 主线 = 改进记忆层
 7. **分工红线**：凡注入鱼鱼的自然语言（persona / 契约 / 工具 desc / 标签措辞 / 自省与 M2-B/M3 的指令）一律由小帕定稿，Kite 只提"这段要改"的位置与理由，不代笔。
+8. **（2026-11-12 新增）M0 工作记忆**：两段都可写、第二段优先；独立单条槽（不进 `memories`、不进检索）；硬 TTL=3 轮自动杀；PERSONA 不动；三处注入文案先留 `{占位}` 跑通链路，由小帕定稿后才在真机生效。

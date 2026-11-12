@@ -21,7 +21,7 @@ python -m pytest tests/ -v          # 详细模式，每个测试的名字都列
 项目根目录的 `pytest.ini` 只做一件事：指定测试都在 `tests/` 里。
 这是必须的——否则 `backups/` 里的旧测试快照会被一起收集，撞名报错。
 
-**绿 vs 红**：全过显示 `72 passed`（状态层移除后测试数已重算）；有挂的会列出 FAILED 和失败原因，**先读它打印的 assert 信息**，多半一眼能看懂。
+**绿 vs 红**：全过显示 `92 passed`（2026-11-12 加入 M0 工作记忆测试后重算）；有挂的会列出 FAILED 和失败原因，**先读它打印的 assert 信息**，多半一眼能看懂。
 
 > **测试日志隔离**：测试走到 `brain`/`scheduler` 里触发的调用轨迹，原本会直接写进 `logs/traces/YYYY-MM-DD.jsonl`，和真机轨迹用的是同一种 12 位 hex `trace_id`，根本分不清；空跑模式还会把提示词写到 `logs/last_prompt.txt`，测试跑完会残留测试提示词误导观测。现在由 `tests/conftest.py` 的 autouse fixture 在 pytest 启动时把这两类产物都改写到 `logs/traces_test/`（轨迹 jsonl + last_prompt.txt）。看真机轨迹用 `python -m fish.trace`、真机 last_prompt 仍在 `logs/last_prompt.txt`，都不会被测试污染；要看测试产物去 `logs/traces_test/`。
 
@@ -41,6 +41,7 @@ python -m pytest tests/ -v          # 详细模式，每个测试的名字都列
 | `test_communication.py` | 小帕↔鱼鱼消息收发、DRY_RUN 整个 wake 零副作用（零事件/零记忆/来信不被消费） | 动了 `messages.py` 或 `scheduler.wake` 的 DRY_RUN 短路 |
 | `test_messages_exchanges.py` | 自省用的双向往来取数与排版 | 动了 `messages.recent_exchanges` / `format_exchanges` |
 | `test_lock.py` | **单实例锁**：第二个进程必须被拒（SystemExit）、进程死锁自动消失（close 即释放）、每次启动尝试各留一行启动日志 | 动了 `fish/lock.py` 或 `main.py` 的加锁顺序 |
+| `test_working_note.py` | **M0 工作记忆**：三态（不写/清空/新提示）不能混、第二段优先且解析失败要丢弃、超长拒写、3 轮 TTL 自动删、改写重置、旁支事件不消耗轮次、DRY_RUN 零副作用、下轮上下文能读回、老库迁移、降级路径不抛异常 | 动了 `memory.settle_working_note` / `brain.normalize_note` / `resolve_note` / `scheduler.wake` 末尾结算 / 两处契约占位 |
 
 ## 我改了 X，要跑什么？（速查表）
 
@@ -50,7 +51,8 @@ python -m pytest tests/ -v          # 详细模式，每个测试的名字都列
 |---|---|---|
 | `prompt.py` 文案 | 全部 | 见下面"红了怎么办"第 2 条 |
 | `scheduler.py` | `test_scheduler.py` + 全部 | |
-| `memory.py` | `test_memory_search.py` + `test_recall_dedup.py` | |
+| `memory.py` | `test_memory_search.py` + `test_recall_dedup.py` + `test_working_note.py` | 动 `settle_working_note` 时三态和 TTL 必测 |
+| `brain.py` 的解析 / 降级 | `test_working_note.py` + 全部 | 新增字段要过钳制；降级分支构造 `Decision` 别漏必填的 `tool` |
 | `tools/__init__.py` | `test_recall_dedup.py` / `test_fulltext_fetch.py` / `test_web_search.py`（按动的工具选） | 新工具记得把契约枚举测试跑过 |
 | `feed.py` | `test_inbox_diversity.py` + `test_fulltext_fetch.py` | |
 | `db.py` 表结构 | 全部 + 手动开一次真库确认没报 "no such column" | |

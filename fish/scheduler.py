@@ -125,6 +125,7 @@ async def wake(conn: sqlite3.Connection, client, trigger: str) -> None:
     if config.DRY_RUN:
         trace.record("decision", tid, action=d.action, tool=d.tool, why=d.why,
                      next_wake_in_min=d.next_wake_in_min,
+                     note_for_next=d.note_for_next,
                      dry_run=True)
         print(f"[DRY_RUN] 已生成假决策：action={d.action} tool={d.tool} "
               f"why={d.why}（完整提示词见 {trace.last_prompt_path()}）trace_id={tid}")
@@ -181,6 +182,16 @@ async def wake(conn: sqlite3.Connection, client, trigger: str) -> None:
     if result and not result.ok and d.action == "tool":
         kind = "event"   # 调了工具但没成，也算一次 event（结果记 summary）
 
+    # ── 工作记忆：合并两段写的提示，第二段（看完结果后）优先 ────────────
+    # I2 等价纪律：解析失败的那一段一律当成「没写」，绝不让坏 JSON 里可能
+    # 夹带的脏文本变成留给下一轮的提示；也绝不因为解析不出就沿用上次结果。
+    # 注意 reaction 只在部分轮次存在（实测约 2/3），所以第一段必须也能写，
+    # 否则空转 / 单段工具那 1/3 的轮次既不能改也不能清自己的安排。
+    first_note = d.note_for_next if d.parse_ok else None
+    second_note = (reaction.note_for_next
+                   if reaction is not None and reaction.parse_ok else None)
+    note_for_next = brain.resolve_note(first_note, second_note)
+
     next_wake = util.now() + _minutes(d.next_wake_in_min)
     # 一次唤醒可能是两次调用，token 要累加，否则成本账会少算一半
     tokens_in, tokens_out = d.tokens
@@ -191,9 +202,9 @@ async def wake(conn: sqlite3.Connection, client, trigger: str) -> None:
     cur = conn.execute(
         """INSERT INTO events
            (ts, kind, trigger, tool, args_json, result_summary, why,
-            next_wake_at,
+            note_for_next, next_wake_at,
             tokens_in, tokens_out, duration_ms, parse_ok, trace_id)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             util.now_iso(), kind, trigger, d.tool,
             json.dumps(d.args, ensure_ascii=False) if d.args else None,
@@ -206,6 +217,10 @@ async def wake(conn: sqlite3.Connection, client, trigger: str) -> None:
                 )
             ),
             d.why or "（没说理由）",
+            # 三态原样落库：NULL=这轮没写 / ""=明确不留 / 文本=新提示。
+            # 这是观察层的历史（「她当时给自己安排了什么」），与 working_note
+            # 表里那个「当前有效」的单条槽是两回事：一个 append，一个覆盖。
+            note_for_next,
             next_wake.isoformat(timespec="seconds"),
             tokens_in, tokens_out,
             int((util.now() - t0).total_seconds() * 1000),
@@ -225,6 +240,14 @@ async def wake(conn: sqlite3.Connection, client, trigger: str) -> None:
             tags=d.tool,
             source_event_id=cur.lastrowid,
         )
+
+    # ── 工作记忆结算：每轮恰好一次 ──────────────────────────────────────
+    # 为什么放在这里而不是 build_messages：那边是「读」，还带着 dry_run 分支；
+    # 结算是「一次 wake 的收尾」，放在主动脉末尾职责最清楚。DRY_RUN 的短路
+    # 在更前面就 return 了，空跑根本走不到这里，天然零副作用。
+    # 「轮」= 一次 wake() 调用，不用 db.wake_count——它是 COUNT(*) FROM events，
+    # 会把 self_review / error 旁支也算进去（真库 64 条里 9 条是旁支）。
+    memory.settle_working_note(conn, note_for_next, cur.lastrowid)
 
     # 自省：每 N 次 wake 重写一次自我叙事（Design_v0.2 §5.3）。
     # 同轮守卫：如果她这一轮自己选了 self_review 工具，就不再强制自动自省，

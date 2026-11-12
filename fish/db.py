@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS events (
   args_json      TEXT,
   result_summary TEXT,
   why            TEXT    NOT NULL,
+  note_for_next  TEXT,                          -- 本轮留给下轮的提示（三态，见 memory.settle_working_note）
   next_wake_at   TEXT,
   tokens_in      INTEGER DEFAULT 0,
   tokens_out     INTEGER DEFAULT 0,
@@ -48,6 +49,18 @@ CREATE TABLE IF NOT EXISTS memories (
   pinned           INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_mem_layer ON memories(layer, ts DESC);
+
+-- 工作记忆：永远只有一行（id 固定为 1）。存「接下来打算做什么」，不是「发生过什么」，
+-- 所以与 memories 物理隔离：不进检索、不进打分、不进自省素材。
+-- remaining_wakes 由 scheduler.wake() 末尾每轮结算一次，归零即删（硬兜底）。
+CREATE TABLE IF NOT EXISTS working_note (
+  id               INTEGER PRIMARY KEY CHECK (id = 1),
+  content          TEXT    NOT NULL,
+  remaining_wakes  INTEGER NOT NULL,
+  created_at       TEXT    NOT NULL,
+  updated_at       TEXT    NOT NULL,
+  born_event_id    INTEGER REFERENCES events(id)
+);
 
 CREATE TABLE IF NOT EXISTS inbox (
   id       INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -98,6 +111,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(events)")}
     if "trace_id" not in cols:
         conn.execute("ALTER TABLE events ADD COLUMN trace_id TEXT")
+    # events.note_for_next（2026-11-12）：本轮留给下一轮的工作记忆提示。
+    # 老库补列，旧行保持 NULL（= 那轮没写提示），不影响任何历史查询。
+    # working_note 是新表，CREATE TABLE IF NOT EXISTS 已在 connect() 里对老库生效，
+    # 不需要在这里手动建。
+    if "note_for_next" not in cols:
+        conn.execute("ALTER TABLE events ADD COLUMN note_for_next TEXT")
 
     # inbox.link（2026-11-10）：read_feed 靠它按需抓全文。老库里没有这列，
     # 旧条目 link 为 NULL——不抓，维持原样，等下轮 RSS 重抓时自愈回填。
