@@ -37,10 +37,12 @@ CONTRACT = """你的回复必须是一个 JSON 对象，字段如下：
   "args": {},
   "why": "第一人称，不超过40字。空转也要写。",
   "next_wake_in_min": 10到180之间的整数,
+  "note_for_next": 不超过50字
 }
 注意：
-next_wake_in_min 是你决定自己想在多少分钟后再次醒来,
-{占位：note_for_next 字段说明，待小帕定稿}""".replace("__TOOLS__", _TOOL_ENUM)
+- next_wake_in_min 是你决定自己想在多少分钟后再次醒来
+- note_for_next 是你留给再次醒来的自己的提示，如果有想让下次的自己做的，就写在这里。可以更新提示，也可以不写
+""".replace("__TOOLS__", _TOOL_ENUM)
 
 
 # 第二段：做完之后，看着结果自评。这一段才是真正产生记忆的地方。
@@ -52,16 +54,18 @@ next_wake_in_min 是你决定自己想在多少分钟后再次醒来,
 # 是否要改、改成什么，留给小帕定稿（红线：注入鱼鱼的自然语言归她）。
 REACTION_CONTRACT = """你刚做了一件事，现在看到了结果。
 
-这一次只回答一件事：这件事使你有什么感想？
+这一次只做：如果刚才这件事使你有感想，记录下来。
 
 输出 JSON：
 {
   "memory": "1-2句你以后会记得的版本。写你实际看到的东西和你的反应。",
-  "next_wake_in_min": 10到180之间的整数（可选，不写就沿用原来的）
+  "next_wake_in_min": 10到180之间的整数（可选，不写就沿用原来的）,
+  "note_for_next": 不超过50字
 }
 注意：
 - memory 会进长期记忆，下次醒来会原样读回给你，只写你真正想留住的
-- {占位：note_for_next 字段说明，待小帕定稿}"""
+- note_for_next 是你留给再次醒来的自己的提示，如果有想让下次的自己做的，就写在这里。可以更新提示，也可以不写
+"""
 
 # 上面两处占位由小帕分别定稿（分工红线，Kite 不代笔）。第二处措辞需要额外
 # 说明「这一段也能写/改/清提示，写了会覆盖第一段」——语义由 brain.resolve_note
@@ -280,7 +284,7 @@ def build_reaction_messages(base_messages: list[dict], decision_raw: str,
         f"【你刚才做的】{tool}\n"
         f"【发生的事】{summary}\n\n"
         f"【你看到的内容】\n{clipped}{tail}\n\n"
-        f"你有什么感想？用 JSON 回一句。"
+        f"如果刚才这件事使你有感想，回复在 JSON 里。"
     )
     return [
         # 换掉 system 里的契约（第一段那份是"做决定"的格式），
