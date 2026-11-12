@@ -103,6 +103,7 @@ fish/
   websearch.py   DeepSeek Search/Fetch API 封装（联网搜索与按需抓全文）
   main.py        入口
 tests/           回归测试（记忆层/工具/通信/调度）
+replay_review.py 一次性运维脚本：补做 19:13 缺素材的自省（2026-11-13 已跑完，留档）
 data/            fish.db（记忆与日志，已在 .gitignore）
 logs/            traces/*.jsonl 调用轨迹 + last_prompt.txt
 ```

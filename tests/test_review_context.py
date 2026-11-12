@@ -164,7 +164,10 @@ def test_build_review_messages_renders_new_block_and_anchor():
     assert config.REVIEW_NOW_LABEL in user
     assert config.REVIEW_EXPERIENCES_LABEL in user
     assert "{这是一条测试日记}" in user
-    assert "重写它。用 JSON 回复。" in user          # 既有收尾措辞一字未动
+    # 收尾指令仍在，且排在增量区块之后（新素材要最靠近指令）。
+    # 刻意不写死措辞：收尾属于小帕的提示词红线，她改字不该让测试变红
+    # （2026-11-13 她把「重写它」改成「按你的需求修改」，旧断言就红过一次）。
+    assert user.rfind("JSON") > user.index(config.REVIEW_EXPERIENCES_LABEL)
     assert config.WORKING_NOTE_LABEL not in user
 
 
